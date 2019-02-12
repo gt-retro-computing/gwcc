@@ -5,19 +5,24 @@ A simple 3-address code IL for compiling C code.
 from enum import Enum
 
 class ILTypes(Enum):
-    char = 0
-    uchar = 1
-    short = 2
-    ushort = 3
-    int = 4
-    uint = 5
-    long = 6
-    ulong = 7
+    char = 'char'
+    uchar = 'uchar'
+    short = 'short'
+    ushort = 'ushort'
+    int = 'int'
+    uint = 'uint'
+    long = 'long'
+    ulong = 'ulong'
+    ptr = 'ptr'
+    void = 'void'
 
 class ILVariable(object):
     def __init__(self, name, typ):
         self.name = name
         self.type = typ
+
+    def __repr__(self):
+        return '%s<%s>' % (self.name, self.type)
 
 class ILConstant(object):
     def __init__(self, value, typ):
@@ -32,6 +37,8 @@ class ILBinaryOp(Enum):
     Xor = '^'
     Shl = '<<'
     Shr = '>>'
+    LogicalAnd = '&&'
+    LogicalOr = '||'
     Mul = '*'
     Div = '/'
     Rem = '%'
@@ -45,7 +52,6 @@ class ILBinaryOp(Enum):
 class ILBinaryStmt(object):
     def __init__(self, dst, op, srcA, srcB):
         assert type(dst) == ILVariable
-        assert type(op) == ILBinaryOp
         assert type(srcA) == ILVariable
         assert type(srcB) == ILVariable
         if dst.type != srcA.type or dst.type != srcB.type:
@@ -68,9 +74,10 @@ class ILUnaryOp(Enum):
 class ILUnaryStmt(object):
     def __init__(self, dst, op, src):
         assert type(dst) == ILVariable
-        assert type(op) == ILUnaryOp
         assert type(src) == ILVariable
         if dst.type != src.type:
+            print dst.type
+            print src.type
             raise ValueError('Unary statement operands must be of equal type')
         self.dst = dst
         self.op = op
@@ -150,6 +157,10 @@ class ILCallStmt(object):
     def __repr__(self):
         return 'call %s, %d' % (self.func.name, self.nargs)
 
+class IRReturnStmt(object):
+    def __repr__(self):
+        return 'return'
+
 class ILRefStmt(object): # basically &x operator
     def __init__(self, dst, var):
         assert type(dst) == ILVariable
@@ -171,7 +182,7 @@ class ILDerefStmt(object): # basically *x operator
         return '%s = *%s' % (self.dst, self.ptr)
 
 
-def ILFunction(object):
+class ILFunction(object):
     def __init__(self, name, params, retval):
         """
         :param name: name of the function
