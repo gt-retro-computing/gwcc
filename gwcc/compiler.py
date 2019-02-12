@@ -1,3 +1,8 @@
+"""
+The gangweed C compiler
+This compiler brought to you by gangweed ganggang
+"""
+
 from pycparser import c_ast
 import il
 
