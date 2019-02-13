@@ -109,6 +109,13 @@ class Compiler(object):
         self.cur_func_temporaries[il_var] = il_var
         return il_var
 
+    def assign(self, dst, src):
+        assert type(dst) == il.ILVariable
+        assert type(src) == il.ILVariable
+        if dst.type != src.type:
+            return il.ILCastStmt(dst, src)
+        return il.ILUnaryStmt(self.cur_func_retvar, il.ILUnaryOp.Identity, src)
+
     def on_funcdef(self, node):
         assert type(node) == c_ast.FuncDef
         func_decl = node.decl
@@ -132,7 +139,7 @@ class Compiler(object):
         self.descend_into(node.body)
         # print node
 
-        print self.cur_func.stmts
+        print '\n'.join(map(str,self.cur_func.stmts))
 
         # exit scope
         self.scope_pop(new_scope)
@@ -152,8 +159,8 @@ class Compiler(object):
         assert type(node) == c_ast.Return
         assert self.cur_func_retvar
         retval = self.on_expr(node.expr)
-        new_stmt = il.ILUnaryStmt(self.cur_func_retvar, il.ILUnaryOp.Identity, retval)
-        self.cur_func.add_stmt(new_stmt)
+
+        self.cur_func.add_stmt(self.assign(self.cur_func_retvar, retval))
 
     def on_binary_op(self, node):
         print node
@@ -168,10 +175,26 @@ class Compiler(object):
             il_op = il.ILBinaryOp.Mul
         else:
             raise ValueError('unsupported binary operation ' + op)
-        # TODO: do cast
-        # TODO: promotion rules
-        new_var = self.new_temporary(srcA.type)
-        new_stmt = il.ILBinaryStmt(new_var, il_op, srcA, srcB)
+
+        a_type, b_type = srcA.type, srcB.type
+        if srcA.type == srcB.type:
+            srcA_casted = srcA
+            srcB_casted = srcB
+        elif il.ILTypes.is_less_than(a_type, b_type):
+            srcA_casted = self.new_temporary(b_type)
+            cast_stmt = self.assign(srcA_casted, srcA)
+            self.cur_func.add_stmt(cast_stmt)
+            srcB_casted = srcB
+        elif il.ILTypes.is_less_than(b_type, a_type):
+            srcA_casted = srcA
+            srcB_casted = self.new_temporary(a_type)
+            cast_stmt = self.assign(srcB_casted, srcB)
+            self.cur_func.add_stmt(cast_stmt)
+        else:
+            assert False # wtf
+
+        new_var = self.new_temporary(srcA_casted.type)
+        new_stmt = il.ILBinaryStmt(new_var, il_op, srcA_casted, srcB_casted)
         self.cur_func.add_stmt(new_stmt)
         return new_var
 
@@ -236,7 +259,10 @@ class Compiler(object):
                     il_type = il.ILTypes.ushort if unsigned else il.ILTypes.short
                 elif name == 'int':
                     if il_type:
-                        raise SyntaxError('double type declaration')
+                        if il_type == il.ILTypes.short:
+                            pass # "short int"
+                        else:
+                            raise SyntaxError('double type declaration')
                     il_type = il.ILTypes.uint if unsigned else il.ILTypes.int
                 elif name == 'long':
                     if il_type:
@@ -259,6 +285,8 @@ class Compiler(object):
                     raise SyntaxError('floating point is fake news')
                 elif name == 'double':
                     if il_type:
+                        if il_type == il.ILTypes.long:
+                            raise SyntaxError('seriously. wtf are you thinking?')
                         raise SyntaxError('double type declaration')
                     raise SyntaxError('this is an 8080. wtf are you thinking?')
                 else:

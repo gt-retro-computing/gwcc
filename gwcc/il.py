@@ -5,16 +5,37 @@ A simple 3-address code IL for compiling C code.
 from enum import Enum
 
 class ILTypes(Enum):
-    char = 'char'
-    uchar = 'uchar'
-    short = 'short'
-    ushort = 'ushort'
-    int = 'int'
-    uint = 'uint'
-    long = 'long'
-    ulong = 'ulong'
-    ptr = 'ptr'
-    void = 'void'
+    char = 0
+    uchar = 1
+    short = 2
+    ushort = 3
+    int = 4
+    uint = 5
+    long = 6
+    ulong = 7
+    ptr = 1000
+    void = 1001
+
+    @staticmethod
+    def is_unsigned(typ):
+        return (typ.value % 1 != 0) and typ.value < ILTypes.ptr.value
+
+    @staticmethod
+    def is_less_than(a, b):
+        assert a.value != ILTypes.ptr and a.value != ILTypes.void
+        assert b.value != ILTypes.ptr and b.value != ILTypes.void
+        return a.value < b.value
+
+    @staticmethod
+    def can_hold(a, b):
+        """
+        :param a: variable's type
+        :param b: value's type
+        :return: Return true if a variable of type can hold any value of type b.
+        """
+        assert a.value != ILTypes.ptr and a.value != ILTypes.void
+        assert b.value != ILTypes.ptr and b.value != ILTypes.void
+        return a.value >= b.value
 
 class ILVariable(object):
     def __init__(self, name, typ):

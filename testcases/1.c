@@ -11,11 +11,12 @@ int value3 = sizeof(int);
 
 int value4 = (short)6;
 
-unsigned int main(int argc, char** argv) {
-    typedef int int2;
-    unsigned int x = 3*(5+5),y;
+int main(int argc, char** argv) {
+    typedef unsigned int int2;
+    int2 x = 3*(5+5),y;
+    char z = 5;
     if (1+1 == 2) {
         y = 3;
     }
-    return y*x;
+    return y*(x+z);
 }
