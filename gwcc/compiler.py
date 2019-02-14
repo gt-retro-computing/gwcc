@@ -1,5 +1,5 @@
 """
-The gangweed C compiler
+The Gangweed Retargetable C compiler
 This compiler brought to you by gangweed ganggang
 """
 
