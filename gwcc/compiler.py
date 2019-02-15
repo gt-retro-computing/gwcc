@@ -67,7 +67,7 @@ class Compiler(object):
             assert self.current_scope == verify
         return self.scope_stack.pop()
 
-    def on_compound(self, compound):
+    def on_compound_node(self, compound):
         """
         Descend into a block, pushing a new scope onto the scope stack, and compile all statements in the block.
         Afterwards, pop and discard the newly-made scope off from the scope stack.
@@ -79,12 +79,12 @@ class Compiler(object):
             self.compile_stmts(compound.block_items)
         self.scope_pop(new_scope)
 
-    def on_typedef(self, node):
+    def on_typedef_node(self, node):
         assert type(node) == c_ast.Typedef
         typedef_name = node.name
         self.current_scope.types[typedef_name] = node.type.type
 
-    def on_decl(self, node):
+    def on_decl_node(self, node):
         """
         :param node: c_ast.Decl node
         :return: new IL variable corresponding to the declaration
@@ -110,8 +110,8 @@ class Compiler(object):
                 self.cur_func_c_locals[node] = il_var
 
                 if node.init:
-                    init_expr_var = self.on_expr(node.init)
-                    self.cur_func.add_stmt(self.make_assign_stmt(il_var, init_expr_var))
+                    init_expr_var = self.on_expr_node(node.init)
+                    self.cur_func.add_stmt(self.on_assign(il_var, init_expr_var))
 
                 return il_var
 
@@ -122,7 +122,7 @@ class Compiler(object):
         assert type(var) == il.Variable
         return self.cur_func.new_temporary(var.type, var.ref_level, var.ref_type)
 
-    def make_assign_stmt(self, dst, src):
+    def on_assign(self, dst, src):
         assert type(dst) == il.Variable
         assert type(src) == il.Variable or type(src) == il.Constant
 
@@ -149,7 +149,7 @@ class Compiler(object):
 
             return il.UnaryStmt(dst, il.UnaryOp.Identity, src)
 
-    def on_funcdef(self, node):
+    def on_funcdef_node(self, node):
         assert type(node) == c_ast.FuncDef
         func_decl = node.decl
         self.current_scope.symbols[func_decl.name] = func_decl
@@ -164,12 +164,12 @@ class Compiler(object):
         # process parameters
         argvars = []
         for param_decl in func_decl.type.args.params:
-            argvars.append(self.on_decl(param_decl))
+            argvars.append(self.on_decl_node(param_decl))
 
         self.cur_func = il.Function(func_decl.name, argvars, retvar)
 
         # process body
-        self.on_compound(node.body)
+        self.on_compound_node(node.body)
         print
         print '\n'.join(map(str,self.cur_func.stmts))
         self.cur_func.verify() # integrity check coz i am stupid
@@ -180,36 +180,36 @@ class Compiler(object):
         self.cur_func_c_locals = None
         self.loop_stack = None
 
-    def on_if(self, node):
+    def on_if_node(self, node):
         assert type(node) == c_ast.If
 
         # handle cond
-        cond_val = self.on_expr(node.cond)
+        cond_val = self.on_expr_node(node.cond)
         true_branch_lbl = self.cur_func.new_label()
         end_lbl = self.cur_func.new_label()
         self.cur_func.add_stmt(il.CondJump(true_branch_lbl, cond_val, il.ComparisonOp.Neq, il.Constant(0, cond_val.type)))
 
         # handle iffalse
         if node.iffalse:
-            self.on_stmt(node.iffalse)
+            self.on_stmt_node(node.iffalse)
         self.cur_func.add_stmt(il.GotoStmt(end_lbl))
 
         self.cur_func.place_label(true_branch_lbl)
         # handle iftrue
-        self.on_stmt(node.iftrue)
+        self.on_stmt_node(node.iftrue)
 
         self.cur_func.place_label(end_lbl)
 
-    def on_return(self, node):
+    def on_return_node(self, node):
         assert type(node) == c_ast.Return
         assert self.cur_func.retval
-        retval = self.on_expr(node.expr)
+        retval = self.on_expr_node(node.expr)
 
-        self.cur_func.add_stmt(self.make_assign_stmt(self.cur_func.retval, retval))
+        self.cur_func.add_stmt(self.on_assign(self.cur_func.retval, retval))
 
     def on_binary_op_node(self, node):
-        srcA = self.on_expr(node.left)
-        srcB = self.on_expr(node.right)
+        srcA = self.on_expr_node(node.left)
+        srcB = self.on_expr_node(node.right)
         il_op = Compiler.parse_binary_op(node.op)
         return self.on_binary_op(srcA, srcB, il_op)
 
@@ -237,13 +237,13 @@ class Compiler(object):
             srcB_casted = srcB
         elif il.Types.is_less_than(a_type, b_type):
             srcA_casted = self.duplicate_var(srcB)
-            cast_stmt = self.make_assign_stmt(srcA_casted, srcA)
+            cast_stmt = self.on_assign(srcA_casted, srcA)
             self.cur_func.add_stmt(cast_stmt)
             srcB_casted = srcB
         elif il.Types.is_less_than(b_type, a_type):
             srcA_casted = srcA
             srcB_casted = self.duplicate_var(srcA)
-            cast_stmt = self.make_assign_stmt(srcB_casted, srcB)
+            cast_stmt = self.on_assign(srcB_casted, srcB)
             self.cur_func.add_stmt(cast_stmt)
         else:
             assert False # wtf
@@ -253,7 +253,7 @@ class Compiler(object):
         self.cur_func.add_stmt(new_stmt)
         return new_var
 
-    def make_dereference(self, ptr_var):
+    def on_dereference(self, ptr_var):
         assert type(ptr_var) == il.Variable
         assert ptr_var.ref_level > 0
         if ptr_var.ref_level > 1:
@@ -263,32 +263,32 @@ class Compiler(object):
         self.cur_func.add_stmt(il.DerefReadStmt(dst_var, ptr_var))
         return dst_var
 
-    def make_reference(self, var):
+    def on_reference(self, var):
         assert type(var) == il.Variable
         ref_type = var.type if var.ref_level == 0 else var.ref_type
         dst_var = self.cur_func.new_temporary(il.Types.ptr, var.ref_level + 1, ref_type)
         self.cur_func.add_stmt(il.RefStmt(dst_var, var))
         return dst_var
 
-    def on_assign(self, node): # assignment EXRESSION
+    def on_assign_node(self, node): # assignment EXRESSION
         is_ptr = type(node.lvalue) == c_ast.UnaryOp and node.lvalue.op == '*'
 
         # lhs should be evaluated first
-        lhs = self.on_expr(node.lvalue.expr if is_ptr else node.lvalue)
+        lhs = self.on_expr_node(node.lvalue.expr if is_ptr else node.lvalue)
         if type(node.lvalue) != c_ast.ID and not is_ptr:
             raise RuntimeError('unsupported lvalue ' + str(node))
 
         # now evaluate rhs
-        rhs_value = self.on_expr(node.rvalue)
+        rhs_value = self.on_expr_node(node.rvalue)
         if node.op != '=': # examples are like +=, ^=, >>=, etc.
             op = Compiler.parse_binary_op(node.op[:-1])
-            lhs_value = self.make_dereference(lhs) if is_ptr else lhs
+            lhs_value = self.on_dereference(lhs) if is_ptr else lhs
             rhs_value = self.on_binary_op(lhs_value, rhs_value, op)
 
         if is_ptr:
             self.cur_func.add_stmt(il.DerefWriteStmt(lhs, rhs_value))
         else:
-            self.cur_func.add_stmt(self.make_assign_stmt(lhs, rhs_value))
+            self.cur_func.add_stmt(self.on_assign(lhs, rhs_value))
 
         # rhs_value is a variable which holds the newly-stored value
         assert type(rhs_value) == il.Variable
@@ -303,11 +303,11 @@ class Compiler(object):
         self.cur_func.place_label(start_lbl)
 
         # handle cond
-        cond_var = self.on_expr(node.cond)
+        cond_var = self.on_expr_node(node.cond)
         self.cur_func.add_stmt(il.CondJump(end_lbl, cond_var, il.ComparisonOp.Equ, il.Constant(0, cond_var.type)))
 
         # handle stmt
-        self.on_stmt(node.stmt)
+        self.on_stmt_node(node.stmt)
         self.cur_func.add_stmt(il.GotoStmt(start_lbl))
 
         self.cur_func.place_label(end_lbl)
@@ -315,34 +315,34 @@ class Compiler(object):
         self.loop_stack.pop()
 
     # nodes that do not evaluate
-    def on_stmt(self, node):
+    def on_stmt_node(self, node):
         typ = type(node)
         if typ == c_ast.Typedef:
-            self.on_typedef(node)
+            self.on_typedef_node(node)
         elif typ == c_ast.Decl:
-            self.on_decl(node)
+            self.on_decl_node(node)
         elif typ == c_ast.FuncDef:
-            self.on_funcdef(node)
+            self.on_funcdef_node(node)
         elif typ == c_ast.If:
-            self.on_if(node)
+            self.on_if_node(node)
         elif typ == c_ast.Return:
-            self.on_return(node)
+            self.on_return_node(node)
         elif typ == c_ast.Compound:
-            self.on_compound(node)
+            self.on_compound_node(node)
         elif typ == c_ast.EmptyStatement:
             pass
         elif typ == c_ast.While:
             self.on_while(node)
         elif typ == c_ast.Continue:
-            self.on_continue_stmt(node)
+            self.on_continue_node(node)
         elif typ == c_ast.Break:
-            self.on_break_stmt(node)
+            self.on_break_node(node)
         # elif typ == c_ast.For:
         #     self.on_for(node)
         else:
-            self.on_expr(node)
+            self.on_expr_node(node)
 
-    def on_continue_stmt(self, node):
+    def on_continue_node(self, node):
         assert type(node) == c_ast.Continue
 
         if not self.cur_func:
@@ -353,7 +353,7 @@ class Compiler(object):
         self.cur_func.add_stmt(il.GotoStmt(start_lbl))
 
 
-    def on_break_stmt(self, node):
+    def on_break_node(self, node):
         assert type(node) == c_ast.Break
 
         if not self.cur_func:
@@ -365,7 +365,7 @@ class Compiler(object):
 
     def on_constant(self, const_type, value):
         il_var = self.cur_func.new_temporary(const_type, 0, None)
-        assign_stmt = self.make_assign_stmt(il_var, il.Constant(value, const_type))
+        assign_stmt = self.on_assign(il_var, il.Constant(value, const_type))
         self.cur_func.add_stmt(assign_stmt)
         return il_var
 
@@ -375,38 +375,38 @@ class Compiler(object):
         else:
             raise RuntimeError('unsupported constant type ' + node.type)
 
-    def on_postincrement(self, expr_node):
-        expr_var = self.on_expr(expr_node) # lol, this will result in a blatant common subexpression
-        self.on_preincrement(expr_node)
+    def on_postincrement_node(self, expr_node):
+        expr_var = self.on_expr_node(expr_node) # lol, this will result in a blatant common subexpression
+        self.on_preincrement_node(expr_node)
         return expr_var
 
-    def on_preincrement(self, expr_node):
+    def on_preincrement_node(self, expr_node):
         # this is kinda hacky but w/e
-        return self.on_assign(c_ast.Assignment('+=', expr_node, c_ast.Constant('int', 1)))
+        return self.on_assign_node(c_ast.Assignment('+=', expr_node, c_ast.Constant('int', 1)))
 
-    def on_postdecrement(self, expr_node):
-        expr_var = self.on_expr(expr_node)
-        self.on_predecrement(expr_node)
+    def on_postdecrement_node(self, expr_node):
+        expr_var = self.on_expr_node(expr_node)
+        self.on_predecrement_node(expr_node)
         return expr_var
 
-    def on_predecrement(self, expr_node):
-        return self.on_assign(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', 1)))
+    def on_predecrement_node(self, expr_node):
+        return self.on_assign_node(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', 1)))
 
-    def on_unary_op(self, node):
+    def on_unary_op_node(self, node):
         if node.op == 'p++':
-            return self.on_postincrement(node.expr)
+            return self.on_postincrement_node(node.expr)
         elif node.op == '++':
-            return self.on_preincrement(node.expr)
+            return self.on_preincrement_node(node.expr)
         elif node.op == 'p--':
-            return self.on_postdecrement(node.expr)
+            return self.on_postdecrement_node(node.expr)
         elif node.op == '--':
-            return self.on_predecrement(node.expr)
+            return self.on_predecrement_node(node.expr)
 
-        expr_var = self.on_expr(node.expr)
+        expr_var = self.on_expr_node(node.expr)
         if node.op == '*':
-            return self.make_dereference(expr_var)
+            return self.on_dereference(expr_var)
         elif node.op == '&':
-            return self.make_reference(expr_var)
+            return self.on_reference(expr_var)
         else:
             il_op = Compiler.parse_unary_op(node.op)
             dst_var = self.duplicate_var(expr_var)
@@ -434,10 +434,10 @@ class Compiler(object):
             return il_var
 
     # nodes that evaluate. return an ILVariable holding the evaluated value
-    def on_expr(self, node):
+    def on_expr_node(self, node):
         typ = type(node)
         if typ == c_ast.Assignment:
-            return self.on_assign(node)
+            return self.on_assign_node(node)
         elif typ == c_ast.BinaryOp:
             return self.on_binary_op_node(node)
         elif typ == c_ast.ID:
@@ -445,13 +445,13 @@ class Compiler(object):
         elif typ == c_ast.Constant:
             return self.on_constant_node(node)
         elif typ == c_ast.UnaryOp:
-            return self.on_unary_op(node)
+            return self.on_unary_op_node(node)
         else:
             raise RuntimeError("unsupported ast expr node " + str(node))
 
     def compile_stmts(self, stmts):
         for node in stmts:
-            self.on_stmt(node)
+            self.on_stmt_node(node)
 
     def compile(self, ast):
         self.compile_stmts(ast.ext)
