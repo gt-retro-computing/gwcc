@@ -45,15 +45,34 @@ class Types(Enum):
         return a.value >= b.value
 
 class Variable(object):
-    def __init__(self, name, typ):
+    def __init__(self, name, typ, ref_level=0, ref_type=None):
+        """
+        :param name: variable name
+        :param typ: variable type (il.Types instance)
+        :param ref_level: reference level (e.g. int=0, int*=1, int**=2, etc.)
+        :param ref_type: pointed type (e.g. int=None, int*=int, int**=int, etc.)
+        """
+        assert typ.parent == Types
         self.name = name
         self.type = typ
+        # tbh, this is a hack for tracking variables at the generation stage, but w/e
+        self.ref_level = ref_level
+        self.ref_type = ref_type
+
+        if ref_level == 0:
+            assert ref_type is None
+        else:
+            assert ref_type.parent == Types
 
     def __repr__(self):
-        return '%s.%s' % (self.type, self.name)
+        if self.type == Types.ptr:
+            return '%s%s.%s' % (self.ref_type, '*' * self.ref_level, self.name)
+        else:
+            return '%s.%s' % (self.type, self.name)
 
 class Constant(object):
     def __init__(self, value, typ):
+        assert typ.parent == Types
         self.value = value
         self.type = typ
 
@@ -135,7 +154,7 @@ class Label(object):
         self._idx = None
 
     def __repr__(self):
-        return self.name + ':'
+        return self.name
 
 class GotoStmt(object):
     def __init__(self, label):
@@ -205,6 +224,13 @@ class DerefReadStmt(object): # basically *x operator
     def __init__(self, dst, ptr):
         assert type(dst) == Variable
         assert type(ptr) == Variable
+
+        if dst.ref_level != ptr.ref_level - 1:
+            raise ValueError('inconsistent reference levels %d and %d' % (dst.ref_level, ptr.ref_level))
+        if dst.ref_level == 0 and dst.type != ptr.ref_type:
+            raise ValueError('inconsistent dereferenced type')
+        if dst.ref_level > 0 and dst.ref_type != ptr.ref_type:
+            raise ValueError('inconsistent referenced type')
         self.dst = dst
         self.ptr = ptr
 
@@ -215,12 +241,29 @@ class DerefWriteStmt(object): # basically *x operator
     def __init__(self, ptr, dst):
         assert type(ptr) == Variable
         assert type(dst) == Variable
+
+        if dst.ref_level != ptr.ref_level - 1:
+            raise ValueError('inconsistent reference levels %d and %d' % (dst.ref_level, ptr.ref_level))
+        if dst.ref_level == 0 and dst.type != ptr.ref_type:
+            raise ValueError('inconsistent dereferenced type')
+        if dst.ref_level > 0 and dst.ref_type != ptr.ref_type:
+            raise ValueError('inconsistent referenced type')
+
         self.ptr = ptr
         self.dst = dst
 
     def __repr__(self):
         return '*%s = %s' % (self.ptr, self.dst)
 
+class CommentStmt(object):
+    """
+    For debugging purposes.
+    """
+    def __init__(self, text):
+        self.text = text
+
+    def __repr__(self):
+        return self.text
 
 class Function(object):
     def __init__(self, name, params, retval):
@@ -260,9 +303,9 @@ class Function(object):
         self.labels.append(label)
         return label
 
-    def new_temporary(self, typ):
+    def new_temporary(self, typ, ref_level, ref_type):
         name = 't' + str(len(self.temporaries))
-        il_var = Variable(name, typ)
+        il_var = Variable(name, typ, ref_level, ref_type)
         self.temporaries[il_var] = il_var
         return il_var
 

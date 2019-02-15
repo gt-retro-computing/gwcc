@@ -41,8 +41,9 @@ class Scope(object):
         return name
 
 class Compiler(object):
-    def __init__(self):
+    def __init__(self, arch):
         self.scope_stack = [ Scope() ]
+        self.target_arch = arch
 
         self.cur_func = None
         self.cur_func_c_locals = None # map from ast data to IRVariable
@@ -94,18 +95,47 @@ class Compiler(object):
         else:
             self.current_scope.symbols[decl_name] = node
 
-            if self.cur_func: # we are in a function -> this is a local decl.
-                # handle initializer if there is one
-                il_var = il.Variable('_local_' + str(self.current_scope_depth) + '_' + node.name, self.get_node_type(node.type))
+            if self.cur_func_c_locals is not None: # we are in a function -> this is a local decl.
+                var_type = self.get_node_type(node.type)
+                if var_type == il.Types.ptr:
+                    ref_level, ref_type = self.extract_pointer_type(node.type)
+                    print 'pointer declared: %s %d %s' % (node.name, ref_level, ref_type)
+                else:
+                    print 'local declared: %s' % (node.name,)
+                    ref_level, ref_type = 0, None
+
+                tmpvar_name = '_local_' + str(self.current_scope_depth) + '_' + node.name
+                il_var = il.Variable(tmpvar_name, var_type, ref_level, ref_type)
                 self.cur_func_c_locals[node] = il_var
+
+                if node.init:
+                    init_expr_var = self.on_expr(node.init)
+                    self.cur_func.add_stmt(self.make_assign_stmt(il_var, init_expr_var))
+
                 return il_var
 
-    def assign(self, dst, src):
+    def duplicate_var(self, var):
+        """
+        Creates a new temporary with the same type, reflevel, and reftype as the one specified.
+        """
+        assert type(var) == il.Variable
+        return self.cur_func.new_temporary(var.type, var.ref_level, var.ref_type)
+
+    def make_assign_stmt(self, dst, src):
         assert type(dst) == il.Variable
         assert type(src) == il.Variable or type(src) == il.Constant
+
         if dst.type != src.type:
             return il.CastStmt(dst, src)
-        return il.UnaryStmt(dst, il.UnaryOp.Identity, src)
+        else:
+            if type(src) == il.Variable:
+                assert dst.ref_level == src.ref_level
+                assert dst.ref_type == src.ref_type
+            else:
+                assert dst.ref_level == 0
+                assert dst.ref_type is None
+
+            return il.UnaryStmt(dst, il.UnaryOp.Identity, src)
 
     def on_funcdef(self, node):
         assert type(node) == c_ast.FuncDef
@@ -127,6 +157,7 @@ class Compiler(object):
 
         # process body
         self.on_compound(node.body)
+        print
         print '\n'.join(map(str,self.cur_func.stmts))
         self.cur_func.verify() # integrity check coz i am stupid
 
@@ -160,59 +191,104 @@ class Compiler(object):
         assert self.cur_func.retval
         retval = self.on_expr(node.expr)
 
-        self.cur_func.add_stmt(self.assign(self.cur_func.retval, retval))
+        self.cur_func.add_stmt(self.make_assign_stmt(self.cur_func.retval, retval))
 
-    def on_binary_op(self, node):
+    def on_binary_op_node(self, node):
         srcA = self.on_expr(node.left)
         srcB = self.on_expr(node.right)
-        op = node.op
+        il_op = Compiler.parse_binary_op(node.op)
+        return self.on_binary_op(srcA, srcB, il_op)
+
+    @staticmethod
+    def parse_binary_op(op):
         if op == '+':
-            il_op = il.BinaryOp.Add
+            return il.BinaryOp.Add
         elif op == '-':
-            il_op = il.BinaryOp.Sub
+            return il.BinaryOp.Sub
         elif op == '*':
-            il_op = il.BinaryOp.Mul
+            return il.BinaryOp.Mul
         elif op == '==':
-            il_op = il.BinaryOp.Equ
+            return il.BinaryOp.Equ
         else:
             raise ValueError('unsupported binary operation ' + op)
+
+    def on_binary_op(self, srcA, srcB, il_op):
+        assert type(srcA) == il.Variable
+        assert type(srcB) == il.Variable
+        assert il_op.parent == il.BinaryOp
 
         a_type, b_type = srcA.type, srcB.type
         if srcA.type == srcB.type:
             srcA_casted = srcA
             srcB_casted = srcB
         elif il.Types.is_less_than(a_type, b_type):
-            srcA_casted = self.cur_func.new_temporary(b_type)
-            cast_stmt = self.assign(srcA_casted, srcA)
+            srcA_casted = self.duplicate_var(srcB)
+            cast_stmt = self.make_assign_stmt(srcA_casted, srcA)
             self.cur_func.add_stmt(cast_stmt)
             srcB_casted = srcB
         elif il.Types.is_less_than(b_type, a_type):
             srcA_casted = srcA
-            srcB_casted = self.cur_func.new_temporary(a_type)
-            cast_stmt = self.assign(srcB_casted, srcB)
+            srcB_casted = self.duplicate_var(srcA)
+            cast_stmt = self.make_assign_stmt(srcB_casted, srcB)
             self.cur_func.add_stmt(cast_stmt)
         else:
             assert False # wtf
 
-        new_var = self.cur_func.new_temporary(srcA_casted.type)
+        new_var = self.duplicate_var(srcA_casted)
         new_stmt = il.BinaryStmt(new_var, il_op, srcA_casted, srcB_casted)
         self.cur_func.add_stmt(new_stmt)
         return new_var
 
-    def on_assign(self, node):
-        if node.op == '=':
-            rhs = self.on_expr(node.rvalue)
+    def dereference(self, ptr_var):
+        assert type(ptr_var) == il.Variable
+        assert ptr_var.ref_level > 0
+        if ptr_var.ref_level > 1:
+            dst_var = self.cur_func.new_temporary(il.Types.ptr, ptr_var.ref_level - 1, ptr_var.ref_type)
         else:
-            raise RuntimeError('unsupported assignment operator ' + node.op)
+            dst_var = self.cur_func.new_temporary(ptr_var.ref_type, 0, None)
+        self.cur_func.add_stmt(il.DerefReadStmt(dst_var, ptr_var))
+        return dst_var
 
-        if type(node.lvalue) == c_ast.ID:
-            lhs = self.on_id_node(node.lvalue)
-            self.cur_func.add_stmt(self.assign(lhs, rhs))
-        elif type(node.lvalue) == c_ast.UnaryOp and node.lvalue.op == '*': # write to pointer
-            lhs_ptr = self.on_expr(node.lvalue.expr)
-            self.cur_func.add_stmt(il.DerefWriteStmt(lhs_ptr, rhs))
-        else:
+    def on_assign(self, node): # assignment EXRESSION
+        is_ptr = type(node.lvalue) == c_ast.UnaryOp and node.lvalue.op == '*'
+
+        # lhs should be evaluated first
+        lhs = self.on_expr(node.lvalue.expr if is_ptr else node.lvalue)
+        if type(node.lvalue) != c_ast.ID and not is_ptr:
             raise RuntimeError('unsupported lvalue ' + str(node))
+
+        # now evaluate rhs
+        rhs_value = self.on_expr(node.rvalue)
+        if node.op != '=': # examples are like +=, ^=, >>=, etc.
+            op = Compiler.parse_binary_op(node.op[:-1])
+            lhs_value = self.dereference(lhs) if is_ptr else lhs
+            rhs_value = self.on_binary_op(lhs_value, rhs_value, op)
+
+        if is_ptr:
+            self.cur_func.add_stmt(il.DerefWriteStmt(lhs, rhs_value))
+        else:
+            self.cur_func.add_stmt(self.make_assign_stmt(lhs, rhs_value))
+
+        # rhs_value is a variable which holds the newly-stored value
+        assert type(rhs_value) == il.Variable
+        return rhs_value
+
+    def on_while(self, node):
+        assert type(node) == c_ast.While
+
+        start_lbl = self.cur_func.new_label()
+        self.cur_func.place_label(start_lbl)
+
+        # handle cond
+        cond_val = self.on_expr(node.cond)
+        end_lbl = self.cur_func.new_label()
+        self.cur_func.add_stmt(il.CondJump(end_lbl, cond_val, il.ComparisonOp.Equ, il.Constant(0, cond_val.type)))
+
+        # handle stmt
+        self.on_stmt(node.stmt)
+        self.cur_func.add_stmt(il.GotoStmt(start_lbl))
+
+        self.cur_func.place_label(end_lbl)
 
     # nodes that do not evaluate
     def on_stmt(self, node):
@@ -227,39 +303,47 @@ class Compiler(object):
             self.on_if(node)
         elif typ == c_ast.Return:
             self.on_return(node)
-        elif typ == c_ast.Assignment:
-            self.on_assign(node)
         elif typ == c_ast.Compound:
             self.on_compound(node)
         elif typ == c_ast.EmptyStatement:
             pass
-        elif typ == c_ast.ID: # some BAKA typed in `var;` as a statement
-            pass
+        elif typ == c_ast.While:
+            self.on_while(node)
         else:
-            raise RuntimeError("unsupported ast stmt node " + str(node))
+            self.on_expr(node)
 
     def on_constant(self, node):
         if node.type == 'int':
             const_type = il.Types.int
-            il_var = self.cur_func.new_temporary(const_type)
-            assign_stmt = self.assign(il_var, il.Constant(node.value, const_type))
+            il_var = self.cur_func.new_temporary(const_type, 0, None)
+            assign_stmt = self.make_assign_stmt(il_var, il.Constant(node.value, const_type))
             self.cur_func.add_stmt(assign_stmt)
             return il_var
         else:
             raise RuntimeError('unsupported constant type ' + node.type)
 
     def on_unary_op(self, node):
-        src_var = self.on_expr(node.expr)
-
-        if node.op == '!':
-            il_op = il.UnaryOp.Not
+        expr_var = self.on_expr(node.expr)
+        if node.op == 'p++':
+            il_op = il.UnaryOp.Identity
+            raise RuntimeError("todo")
+            # todo
+        elif node.op == '*':
+            il_op = il.UnaryOp.Identity
+            return self.dereference(expr_var)
         else:
-            raise RuntimeError('unsupported unary operation ' + node.op)
+            il_op = Compiler.parse_unary_op(node.op)
+            dst_var = self.duplicate_var(expr_var)
+            new_stmt = il.UnaryStmt(dst_var, il_op, expr_var)
+            self.cur_func.add_stmt(new_stmt)
+            return dst_var
 
-        dst_var = self.cur_func.new_temporary(src_var.type)
-        new_stmt = il.UnaryStmt(dst_var, il_op, src_var)
-        self.cur_func.add_stmt(new_stmt)
-        return dst_var
+    @staticmethod
+    def parse_unary_op(op):
+        if op == '!':
+            return il.UnaryOp.Not
+        else:
+            raise RuntimeError('unsupported unary operation ' + op)
 
     def on_id_node(self, node):
         """Resolve an identifier (ID) node into a variable"""
@@ -276,8 +360,10 @@ class Compiler(object):
     # nodes that evaluate. return an ILVariable holding the evaluated value
     def on_expr(self, node):
         typ = type(node)
-        if typ == c_ast.BinaryOp:
-            return self.on_binary_op(node)
+        if typ == c_ast.Assignment:
+            return self.on_assign(node)
+        elif typ == c_ast.BinaryOp:
+            return self.on_binary_op_node(node)
         elif typ == c_ast.ID:
             return self.on_id_node(node)
         elif typ == c_ast.Constant:
@@ -339,7 +425,7 @@ class Compiler(object):
         return decl_sign, decl_size, decl_type
 
     @staticmethod
-    def get_il_type(signedness, decl_size, decl_type):
+    def parse_decl_type(signedness, decl_size, decl_type):
         unsigned = signedness == 'unsigned'
         if decl_type == 'char':
             return il.Types.uchar if unsigned else il.Types.char
@@ -369,7 +455,7 @@ class Compiler(object):
             return self.get_node_type(node.type)
         if type(node) == c_ast.IdentifierType:
             signedness, decl_size, decl_type = Compiler.interpret_identifier_type(node.names)
-            builtin_type = Compiler.get_il_type(signedness, decl_size, decl_type)
+            builtin_type = Compiler.parse_decl_type(signedness, decl_size, decl_type)
             if builtin_type:
                 return builtin_type
             else:
@@ -380,3 +466,16 @@ class Compiler(object):
         else:
             raise RuntimeError("unsupported ast type decl " + str(node))
 
+    def extract_pointer_type(self, node):
+        """
+        Extracts reflevel and reftype from a PtrDecl ast node.
+        :param node: PtrDecl node
+        :return: reference level (i.e. pointer, pointer to pointer, etc.) and pointed-to type
+        """
+        assert type(node) == c_ast.PtrDecl
+        ref_level = 0
+        while type(node) == c_ast.PtrDecl:
+            node = node.type
+            ref_level += 1
+        ref_type = self.get_node_type(node)
+        return ref_level, ref_type

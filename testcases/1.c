@@ -12,14 +12,28 @@ int value3 = sizeof(int);
 int value4 = (short)6;
 
 int main(int argc, char** argv) {
+int cock;
+    char* test = *argv;
+    argv += 1;
+
     typedef unsigned int int2;
     int2 x = 3*(5+5),y;
     char z = 5;
     z;
     int* ptr = 5;
     {
+    int zozzle = *ptr;
+//    z++;
+//    int lol = ++z;
+//    lol = (*ptr)++;
+//    ptr++;
+    ptr += 777;
+    int lol = *ptr += 888;
+    z = (x = y);
     }
-    if (1);
+    if (1) while (1);
+//    for (;;){;}
+//    for (int i = 0; i < 5; i++)
     if (1+1 == 2) {
         y = 3;
 //        x++;
