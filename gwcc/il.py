@@ -50,12 +50,15 @@ class Variable(object):
         self.type = typ
 
     def __repr__(self):
-        return '%s<%s>' % (self.name, self.type)
+        return '%s.%s' % (self.type, self.name)
 
 class Constant(object):
     def __init__(self, value, typ):
         self.value = value
         self.type = typ
+
+    def __repr__(self):
+        return '%s.%s' % (self.type, self.value)
 
 class BinaryOp(Enum):
     Add = '+'
@@ -80,6 +83,7 @@ class BinaryOp(Enum):
 class BinaryStmt(object):
     def __init__(self, dst, op, srcA, srcB):
         assert type(dst) == Variable
+        assert op.parent == BinaryOp
         assert type(srcA) == Variable
         assert type(srcB) == Variable
         if dst.type != srcA.type or dst.type != srcB.type:
@@ -102,7 +106,8 @@ class UnaryOp(Enum):
 class UnaryStmt(object):
     def __init__(self, dst, op, src):
         assert type(dst) == Variable
-        assert type(src) == Variable
+        assert op.parent == UnaryOp
+        assert type(src) == Variable or type(src) == Constant
         if dst.type != src.type:
             print dst.type
             print src.type
@@ -127,13 +132,10 @@ class CastStmt(object):
 class Label(object):
     def __init__(self, name):
         self.name = name
-        self.idx = None
-
-    def set_idx(self, index):
-        self.idx = index
+        self._idx = None
 
     def __repr__(self):
-        return self.name
+        return self.name + ':'
 
 class GotoStmt(object):
     def __init__(self, label):
@@ -143,7 +145,7 @@ class GotoStmt(object):
     def __repr__(self):
         return 'goto %s' % (self.label,)
 
-class ComparisonOp(object):
+class ComparisonOp(Enum):
     Equ = '=='
     Neq = '!='
     Lt = '<'
@@ -152,20 +154,20 @@ class ComparisonOp(object):
     Geq = '>='
 
 class CondJump(object):
-    def __init__(self, label, srcA, op, srcB):
+    def __init__(self, label, srcA, op, imm):
         assert type(label) == Label
         assert type(srcA) == Variable
-        assert type(op) == ComparisonOp
-        assert type(srcB) == Variable
-        if srcA.type != srcB.type:
+        assert op.parent == ComparisonOp
+        assert type(imm) == Constant
+        if srcA.type != imm.type:
             raise ValueError('Conditional jump statement operands must be of equal type')
         self.label = label
         self.srcA = srcA
         self.op = op
-        self.srcB = srcB
+        self.imm = imm
 
     def __repr__(self):
-        return 'if (%s %s %s) goto %s' % (self.srcA, self.op, self.srcB, self.label)
+        return 'if (%s %s %s) goto %s' % (self.srcA, self.op, self.imm, self.label)
 
 class ParamStmt(object):
     def __init__(self, arg):
@@ -199,7 +201,7 @@ class RefStmt(object): # basically &x operator
     def __repr__(self):
         return '%s = &%s' % (self.dst, self.var)
 
-class DerefStmt(object): # basically *x operator
+class DerefReadStmt(object): # basically *x operator
     def __init__(self, dst, ptr):
         assert type(dst) == Variable
         assert type(ptr) == Variable
@@ -208,6 +210,16 @@ class DerefStmt(object): # basically *x operator
 
     def __repr__(self):
         return '%s = *%s' % (self.dst, self.ptr)
+
+class DerefWriteStmt(object): # basically *x operator
+    def __init__(self, ptr, dst):
+        assert type(ptr) == Variable
+        assert type(dst) == Variable
+        self.ptr = ptr
+        self.dst = dst
+
+    def __repr__(self):
+        return '*%s = %s' % (self.ptr, self.dst)
 
 
 class Function(object):
@@ -221,15 +233,47 @@ class Function(object):
         self.name = name
         self.params = params
         self.retval = retval
+        self.temporaries = {}
 
         self.locals_size = 0
         self.locals = []
 
         self.stmts = []
+        self.labels = []
 
     @property
     def num_args(self):
         return len(self.params)
 
     def add_stmt(self, stmt):
+        if type(stmt) == Label:
+            raise ValueError('use place_label to add the label here, not add_stmt')
         self.stmts.append(stmt)
+
+    def place_label(self, label):
+        assert type(label) == Label
+        label._idx = len(self.stmts)
+        self.stmts.append(label)
+
+    def new_label(self):
+        label = Label('L%d' % (len(self.labels)))
+        self.labels.append(label)
+        return label
+
+    def new_temporary(self, typ):
+        name = 't' + str(len(self.temporaries))
+        il_var = Variable(name, typ)
+        self.temporaries[il_var] = il_var
+        return il_var
+
+    def verify(self):
+        # ensure that all labels are placed
+        for label in self.labels:
+            assert label in self.stmts
+
+        # ensure that all jumps reference valid labels
+        for stmt in self.stmts:
+            if type(stmt) == GotoStmt or type(stmt) == CondJump:
+                assert stmt.label in self.labels
+
+        # todo: verify def/use chains are valid

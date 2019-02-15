@@ -15,8 +15,17 @@ int main(int argc, char** argv) {
     typedef unsigned int int2;
     int2 x = 3*(5+5),y;
     char z = 5;
+    z;
+    int* ptr = 5;
+    {
+    }
+    if (1);
     if (1+1 == 2) {
         y = 3;
+//        x++;
+    } else if (!!z) {
+        y = 5;
+        *ptr = 3;
     }
     return y*(x+z);
 }
