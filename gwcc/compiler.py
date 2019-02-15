@@ -322,14 +322,35 @@ class Compiler(object):
         else:
             raise RuntimeError('unsupported constant type ' + node.type)
 
+    def on_postincrement(self, expr_node):
+        expr_var = self.on_expr(expr_node) # lol, this will result in a blatant common subexpression
+        self.on_preincrement(expr_node)
+        return expr_var
+
+    def on_preincrement(self, expr_node):
+        # this is kinda hacky but w/e
+        return self.on_assign(c_ast.Assignment('+=', expr_node, c_ast.Constant('int', 1)))
+
+    def on_postdecrement(self, expr_node):
+        expr_var = self.on_expr(expr_node)
+        self.on_predecrement(expr_node)
+        return expr_var
+
+    def on_predecrement(self, expr_node):
+        return self.on_assign(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', 1)))
+
     def on_unary_op(self, node):
-        expr_var = self.on_expr(node.expr)
         if node.op == 'p++':
-            il_op = il.UnaryOp.Identity
-            raise RuntimeError("todo")
-            # todo
-        elif node.op == '*':
-            il_op = il.UnaryOp.Identity
+            return self.on_postincrement(node.expr)
+        elif node.op == '++':
+            return self.on_preincrement(node.expr)
+        elif node.op == 'p--':
+            return self.on_postdecrement(node.expr)
+        elif node.op == '--':
+            return self.on_predecrement(node.expr)
+
+        expr_var = self.on_expr(node.expr)
+        if node.op == '*':
             return self.dereference(expr_var)
         else:
             il_op = Compiler.parse_unary_op(node.op)

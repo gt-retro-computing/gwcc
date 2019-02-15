@@ -23,10 +23,11 @@ int cock;
     int* ptr = 5;
     {
     int zozzle = *ptr;
-//    z++;
-//    int lol = ++z;
-//    lol = (*ptr)++;
-//    ptr++;
+    z++;
+    if(0);
+    int lolz = ++z;
+    lolz = (*ptr)++;
+    ptr++;
     ptr += 777;
     int lol = *ptr += 888;
     z = (x = y);
@@ -36,10 +37,11 @@ int cock;
 //    for (int i = 0; i < 5; i++)
     if (1+1 == 2) {
         y = 3;
-//        x++;
+        x++;
     } else if (!!z) {
         y = 5;
         *ptr = 3;
     }
     return y*(x+z);
+
 }
