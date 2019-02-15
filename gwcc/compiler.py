@@ -127,6 +127,17 @@ class Compiler(object):
         assert type(src) == il.Variable or type(src) == il.Constant
 
         if dst.type != src.type:
+            # handle pointer arithmetic
+            if dst.type == il.Types.ptr:
+                assert dst.ref_level > 0
+                ptr_size = self.target_arch.sizeof(dst.ref_type)
+                if ptr_size > 1:
+                    if type(src) == il.Variable:
+                        src = self.on_binary_op(src, self.on_constant(src.type, ptr_size), il.BinaryOp.Mul)
+                    elif type(src) == il.Constant:
+                        src = self.on_constant(src.type, src.value * ptr_size)
+                    else:
+                        assert False
             return il.CastStmt(dst, src)
         else:
             if type(src) == il.Variable:
@@ -242,7 +253,7 @@ class Compiler(object):
         self.cur_func.add_stmt(new_stmt)
         return new_var
 
-    def dereference(self, ptr_var):
+    def make_dereference(self, ptr_var):
         assert type(ptr_var) == il.Variable
         assert ptr_var.ref_level > 0
         if ptr_var.ref_level > 1:
@@ -250,6 +261,13 @@ class Compiler(object):
         else:
             dst_var = self.cur_func.new_temporary(ptr_var.ref_type, 0, None)
         self.cur_func.add_stmt(il.DerefReadStmt(dst_var, ptr_var))
+        return dst_var
+
+    def make_reference(self, var):
+        assert type(var) == il.Variable
+        ref_type = var.type if var.ref_level == 0 else var.ref_type
+        dst_var = self.cur_func.new_temporary(il.Types.ptr, var.ref_level + 1, ref_type)
+        self.cur_func.add_stmt(il.RefStmt(dst_var, var))
         return dst_var
 
     def on_assign(self, node): # assignment EXRESSION
@@ -264,7 +282,7 @@ class Compiler(object):
         rhs_value = self.on_expr(node.rvalue)
         if node.op != '=': # examples are like +=, ^=, >>=, etc.
             op = Compiler.parse_binary_op(node.op[:-1])
-            lhs_value = self.dereference(lhs) if is_ptr else lhs
+            lhs_value = self.make_dereference(lhs) if is_ptr else lhs
             rhs_value = self.on_binary_op(lhs_value, rhs_value, op)
 
         if is_ptr:
@@ -345,13 +363,15 @@ class Compiler(object):
         start_lbl, end_lbl = self.loop_stack[-1]
         self.cur_func.add_stmt(il.GotoStmt(end_lbl))
 
-    def on_constant(self, node):
+    def on_constant(self, const_type, value):
+        il_var = self.cur_func.new_temporary(const_type, 0, None)
+        assign_stmt = self.make_assign_stmt(il_var, il.Constant(value, const_type))
+        self.cur_func.add_stmt(assign_stmt)
+        return il_var
+
+    def on_constant_node(self, node):
         if node.type == 'int':
-            const_type = il.Types.int
-            il_var = self.cur_func.new_temporary(const_type, 0, None)
-            assign_stmt = self.make_assign_stmt(il_var, il.Constant(node.value, const_type))
-            self.cur_func.add_stmt(assign_stmt)
-            return il_var
+            return self.on_constant(il.Types.int, node.value)
         else:
             raise RuntimeError('unsupported constant type ' + node.type)
 
@@ -384,7 +404,9 @@ class Compiler(object):
 
         expr_var = self.on_expr(node.expr)
         if node.op == '*':
-            return self.dereference(expr_var)
+            return self.make_dereference(expr_var)
+        elif node.op == '&':
+            return self.make_reference(expr_var)
         else:
             il_op = Compiler.parse_unary_op(node.op)
             dst_var = self.duplicate_var(expr_var)
@@ -421,7 +443,7 @@ class Compiler(object):
         elif typ == c_ast.ID:
             return self.on_id_node(node)
         elif typ == c_ast.Constant:
-            return self.on_constant(node)
+            return self.on_constant_node(node)
         elif typ == c_ast.UnaryOp:
             return self.on_unary_op(node)
         else:

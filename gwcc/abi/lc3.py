@@ -12,4 +12,4 @@ class LC3(ABI):
     CHAR_SIZE = 1
     SHORT_SIZE = 1
     INT_SIZE = 1
-    LONG_SIZE = 0
+    LONG_SIZE = 2

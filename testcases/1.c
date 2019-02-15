@@ -14,7 +14,9 @@ int value4 = (short)6;
 int main(int argc, char** argv) {
 int cock;
     char* test = *argv;
-    argv += 1;
+    long meme;
+    long* lol = &meme;
+    lol += 1;
 
     typedef unsigned int int2;
     int2 x = 3*(5+5),y;
