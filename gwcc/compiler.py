@@ -47,6 +47,7 @@ class Compiler(object):
 
         self.cur_func = None
         self.cur_func_c_locals = None # map from ast data to IRVariable
+        self.loop_stack = None # stack of tuples (cond_label, end_label) for continue and break statements
 
     @property
     def current_scope(self):
@@ -145,6 +146,7 @@ class Compiler(object):
         # new scope
         new_scope = self.scope_push()
         self.cur_func_c_locals = {}
+        self.loop_stack = []
 
         # return val
         retvar = il.Variable('_retval', self.get_node_type(func_decl.type.type.type))
@@ -165,6 +167,7 @@ class Compiler(object):
         self.scope_pop(new_scope)
         self.cur_func = None
         self.cur_func_c_locals = None
+        self.loop_stack = None
 
     def on_if(self, node):
         assert type(node) == c_ast.If
@@ -277,18 +280,21 @@ class Compiler(object):
         assert type(node) == c_ast.While
 
         start_lbl = self.cur_func.new_label()
+        end_lbl = self.cur_func.new_label()
+        self.loop_stack.append((start_lbl, end_lbl))
         self.cur_func.place_label(start_lbl)
 
         # handle cond
-        cond_val = self.on_expr(node.cond)
-        end_lbl = self.cur_func.new_label()
-        self.cur_func.add_stmt(il.CondJump(end_lbl, cond_val, il.ComparisonOp.Equ, il.Constant(0, cond_val.type)))
+        cond_var = self.on_expr(node.cond)
+        self.cur_func.add_stmt(il.CondJump(end_lbl, cond_var, il.ComparisonOp.Equ, il.Constant(0, cond_var.type)))
 
         # handle stmt
         self.on_stmt(node.stmt)
         self.cur_func.add_stmt(il.GotoStmt(start_lbl))
 
         self.cur_func.place_label(end_lbl)
+
+        self.loop_stack.pop()
 
     # nodes that do not evaluate
     def on_stmt(self, node):
@@ -309,8 +315,35 @@ class Compiler(object):
             pass
         elif typ == c_ast.While:
             self.on_while(node)
+        elif typ == c_ast.Continue:
+            self.on_continue_stmt(node)
+        elif typ == c_ast.Break:
+            self.on_break_stmt(node)
+        # elif typ == c_ast.For:
+        #     self.on_for(node)
         else:
             self.on_expr(node)
+
+    def on_continue_stmt(self, node):
+        assert type(node) == c_ast.Continue
+
+        if not self.cur_func:
+            raise SyntaxError("use of 'continue' outside of function")
+        if not self.loop_stack:
+            raise SyntaxError("use of 'continue' outside of loop")
+        start_lbl, end_lbl = self.loop_stack[-1]
+        self.cur_func.add_stmt(il.GotoStmt(start_lbl))
+
+
+    def on_break_stmt(self, node):
+        assert type(node) == c_ast.Break
+
+        if not self.cur_func:
+            raise SyntaxError("use of 'break' outside of function")
+        if not self.loop_stack:
+            raise SyntaxError("use of 'break' outside of loop")
+        start_lbl, end_lbl = self.loop_stack[-1]
+        self.cur_func.add_stmt(il.GotoStmt(end_lbl))
 
     def on_constant(self, node):
         if node.type == 'int':

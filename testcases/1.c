@@ -32,9 +32,13 @@ int cock;
     int lol = *ptr += 888;
     z = (x = y);
     }
-    if (1) while (1);
+    if (1) while (1) {
+    continue;
+    }
+    while (1) { break; }
+//    for (;;);
 //    for (;;){;}
-//    for (int i = 0; i < 5; i++)
+//    for (int i = 0; i < 5; i++);
     if (1+1 == 2) {
         y = 3;
         x++;
