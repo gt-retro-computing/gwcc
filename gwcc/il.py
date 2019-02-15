@@ -13,12 +13,19 @@ class ILTypes(Enum):
     uint = 5
     long = 6
     ulong = 7
+    longlong = 8
+    ulonglong = 9
+
+    float = 100
+    double = 101
+    longdouble = 102
+
     ptr = 1000
     void = 1001
 
     @staticmethod
     def is_unsigned(typ):
-        return (typ.value % 1 != 0) and typ.value < ILTypes.ptr.value
+        return (typ.value % 1 != 0) and typ.value < ILTypes.float.value
 
     @staticmethod
     def is_less_than(a, b):

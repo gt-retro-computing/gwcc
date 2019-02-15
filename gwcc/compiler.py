@@ -238,62 +238,77 @@ class Compiler(object):
     def compile(self, ast):
         self.compile_stmts(ast.ext)
 
+    @staticmethod
+    def interpret_identifier_type(names):
+        # todo: warn on default-int, repeat short/signed/unsigned specifier, etc.
+        def error_specifier(token, spec):
+            raise SyntaxError("cannot combine '%s' with previous declaration specifier %s" % (token, spec))
+
+        decl_sign = ''
+        decl_size = ''
+        decl_type = ''
+        for token in names:
+            if token == 'unsigned':
+                if decl_sign == 'signed':
+                    error_specifier(token, decl_sign)
+                decl_sign = 'unsigned'
+            elif token == 'signed':
+                if decl_sign == 'unsigned':
+                    error_specifier(token, decl_sign)
+                decl_sign = 'signed'
+            elif token == 'short':
+                if 'long' in decl_size:
+                    error_specifier(token, decl_size)
+                decl_size = 'short'
+            elif token == 'long':
+                if decl_size == 'short':
+                    error_specifier(token, decl_size)
+                decl_size += token
+            else:
+                if decl_type:
+                    error_specifier(token, decl_type)
+                decl_type = token
+
+        if not decl_type:
+            decl_type = 'int'
+        if decl_size:
+            if decl_type != 'int':
+                error_specifier(decl_size, decl_type)
+        if not decl_sign:
+            decl_sign = 'signed'
+        else:
+            if decl_type != 'int' and decl_type != 'char':
+                error_specifier(decl_sign, decl_type)
+
+        return decl_sign, decl_size, decl_type
+
     def c_ast_type_to_il_type(self, node):
         if type(node) == c_ast.IdentifierType:
-            if 'signed' in node.names and 'unsigned' in node.names:
-                raise SyntaxError('type is declared as both unsigned and signed')
-            unsigned = 'unsigned' in node.names
-            il_type = None
-            for name in node.names:
-                if name == 'signed':
-                    pass # discard
-                elif name == 'unsigned':
-                    pass # discard
-                elif name == 'char':
-                    if il_type:
-                        raise SyntaxError('double type declaration')
-                    il_type = il.ILTypes.uchar if unsigned else il.ILTypes.char
-                elif name == 'short':
-                    if il_type:
-                        raise SyntaxError('double type declaration')
-                    il_type = il.ILTypes.ushort if unsigned else il.ILTypes.short
-                elif name == 'int':
-                    if il_type:
-                        if il_type == il.ILTypes.short:
-                            pass # "short int"
-                        else:
-                            raise SyntaxError('double type declaration')
-                    il_type = il.ILTypes.uint if unsigned else il.ILTypes.int
-                elif name == 'long':
-                    if il_type:
-                        if il_type == il.ILTypes.int:
-                            pass
-                        elif il_type == il.ILTypes.long:
-                            raise SyntaxError('long long is not supported')
-                        else:
-                            raise SyntaxError('invalid syntax in type decl %s' + ' '.join(node.names))
-                    il_type = il.ILTypes.ulong if unsigned else il.ILTypes.long
-                elif name == 'void':
-                    if il_type:
-                        raise SyntaxError('double type declaration')
-                    if 'signed' in node.names or 'unsigned' in node.names:
-                        raise SyntaxError('signed/unsigned void type')
-                    il_type = il.ILTypes.void
-                elif name == 'float':
-                    if il_type:
-                        raise SyntaxError('double type declaration')
-                    raise SyntaxError('floating point is fake news')
-                elif name == 'double':
-                    if il_type:
-                        if il_type == il.ILTypes.long:
-                            raise SyntaxError('seriously. wtf are you thinking?')
-                        raise SyntaxError('double type declaration')
-                    raise SyntaxError('this is an 8080. wtf are you thinking?')
+            signedness, decl_size, decl_type = Compiler.interpret_identifier_type(node.names)
+            unsigned = signedness == 'unsigned'
+            if decl_type == 'char':
+                return il.ILTypes.uchar if unsigned else il.ILTypes.char
+            elif decl_type == 'int':
+                if decl_size == 'short':
+                    return il.ILTypes.ushort if unsigned else il.ILTypes.short
+                elif decl_size == 'long':
+                    return il.ILTypes.ulong if unsigned else il.ILTypes.long
+                elif decl_size == 'longlong':
+                    return il.ILTypes.ulonglong if unsigned else il.ILTypes.longlong
                 else:
-                    # try to resolve
-                    il_type = self.c_ast_type_to_il_type(self.current_scope.resolve_basetype(name))
-            assert il_type
-            return il_type
+                    return il.ILTypes.uint if unsigned else il.ILTypes.int
+            elif decl_type == 'void':
+                return il.ILTypes.void
+            elif decl_type == 'float':
+                return il.ILTypes.float
+            elif decl_type == 'double':
+                if decl_size == 'long':
+                    return il.ILTypes.longdouble
+                else:
+                    return il.ILTypes.double
+            else:
+                # try to resolve
+                return self.c_ast_type_to_il_type(self.current_scope.resolve_basetype(decl_type))
         elif type(node) == c_ast.PtrDecl:
             return il.ILTypes.ptr
         else:
