@@ -21,7 +21,11 @@ class EnumValue(object):
 			return self.value == other
 
 	def __str__(self):
-		return '%s.%s' % (self.parent.__name__, self.name)
+		if type(self.value) == str:
+			return self.value
+		else:
+			return self.name
+			# return '%s.%s' % (self.parent.__name__, self.name)
 
 	def __repr__(self):
 		return '<%s.%s val=%r>' % (self.parent.__name__, self.name, self.value)
