@@ -4,7 +4,7 @@ A simple 3-address code IL for compiling C code.
 
 from enum import Enum
 
-class ILTypes(Enum):
+class Types(Enum):
     char = 0
     uchar = 1
     short = 2
@@ -25,12 +25,12 @@ class ILTypes(Enum):
 
     @staticmethod
     def is_unsigned(typ):
-        return (typ.value % 1 != 0) and typ.value < ILTypes.float.value
+        return (typ.value % 1 != 0) and typ.value < Types.float.value
 
     @staticmethod
     def is_less_than(a, b):
-        assert a.value != ILTypes.ptr and a.value != ILTypes.void
-        assert b.value != ILTypes.ptr and b.value != ILTypes.void
+        assert a.value != Types.ptr and a.value != Types.void
+        assert b.value != Types.ptr and b.value != Types.void
         return a.value < b.value
 
     @staticmethod
@@ -40,11 +40,11 @@ class ILTypes(Enum):
         :param b: value's type
         :return: Return true if a variable of type can hold any value of type b.
         """
-        assert a.value != ILTypes.ptr and a.value != ILTypes.void
-        assert b.value != ILTypes.ptr and b.value != ILTypes.void
+        assert a.value != Types.ptr and a.value != Types.void
+        assert b.value != Types.ptr and b.value != Types.void
         return a.value >= b.value
 
-class ILVariable(object):
+class Variable(object):
     def __init__(self, name, typ):
         self.name = name
         self.type = typ
@@ -52,12 +52,12 @@ class ILVariable(object):
     def __repr__(self):
         return '%s<%s>' % (self.name, self.type)
 
-class ILConstant(object):
+class Constant(object):
     def __init__(self, value, typ):
         self.value = value
         self.type = typ
 
-class ILBinaryOp(Enum):
+class BinaryOp(Enum):
     Add = '+'
     Sub = '-'
     And = '&'
@@ -77,11 +77,11 @@ class ILBinaryOp(Enum):
     Leq = '<='
     Geq = '>='
 
-class ILBinaryStmt(object):
+class BinaryStmt(object):
     def __init__(self, dst, op, srcA, srcB):
-        assert type(dst) == ILVariable
-        assert type(srcA) == ILVariable
-        assert type(srcB) == ILVariable
+        assert type(dst) == Variable
+        assert type(srcA) == Variable
+        assert type(srcB) == Variable
         if dst.type != srcA.type or dst.type != srcB.type:
             raise ValueError('Binary statement operands must be of equal type')
 
@@ -93,16 +93,16 @@ class ILBinaryStmt(object):
     def __repr__(self):
         return '%s = %s %s %s' % (self.dst, self.srcA, self.op, self.srcB)
 
-class ILUnaryOp(Enum):
+class UnaryOp(Enum):
     Identity = ''
     Not = '!'
     Negate = '~'
     Minus = '-'
 
-class ILUnaryStmt(object):
+class UnaryStmt(object):
     def __init__(self, dst, op, src):
-        assert type(dst) == ILVariable
-        assert type(src) == ILVariable
+        assert type(dst) == Variable
+        assert type(src) == Variable
         if dst.type != src.type:
             print dst.type
             print src.type
@@ -114,17 +114,17 @@ class ILUnaryStmt(object):
     def __repr__(self):
         return '%s = %s%s' % (self.dst, self.op, self.src)
 
-class ILCastStmt(object):
+class CastStmt(object):
     def __init__(self, dst, src):
-        assert type(dst) == ILVariable
-        assert type(src) == ILVariable
+        assert type(dst) == Variable
+        assert type(src) == Variable
         self.dst = dst
         self.src = src
 
     def __repr__(self):
         return '%s = (%s) %s' % (self.dst, self.dst.type, self.src)
 
-class ILLabel(object):
+class Label(object):
     def __init__(self, name):
         self.name = name
         self.idx = None
@@ -135,15 +135,15 @@ class ILLabel(object):
     def __repr__(self):
         return self.name
 
-class ILGotoStmt(object):
+class GotoStmt(object):
     def __init__(self, label):
-        assert type(label) == ILLabel
+        assert type(label) == Label
         self.label = label
 
     def __repr__(self):
         return 'goto %s' % (self.label,)
 
-class ILComparisonOp(object):
+class ComparisonOp(object):
     Equ = '=='
     Neq = '!='
     Lt = '<'
@@ -151,12 +151,12 @@ class ILComparisonOp(object):
     Leq = '<='
     Geq = '>='
 
-class ILCondJump(object):
+class CondJump(object):
     def __init__(self, label, srcA, op, srcB):
-        assert type(label) == ILLabel
-        assert type(srcA) == ILVariable
-        assert type(op) == ILComparisonOp
-        assert type(srcB) == ILVariable
+        assert type(label) == Label
+        assert type(srcA) == Variable
+        assert type(op) == ComparisonOp
+        assert type(srcB) == Variable
         if srcA.type != srcB.type:
             raise ValueError('Conditional jump statement operands must be of equal type')
         self.label = label
@@ -167,17 +167,17 @@ class ILCondJump(object):
     def __repr__(self):
         return 'if (%s %s %s) goto %s' % (self.srcA, self.op, self.srcB, self.label)
 
-class ILParamStmt(object):
+class ParamStmt(object):
     def __init__(self, arg):
-        assert type(arg) == ILVariable
+        assert type(arg) == Variable
         self.arg = arg
 
     def __repr__(self):
         return 'param %s' % (self.arg,)
 
-class ILCallStmt(object):
+class CallStmt(object):
     def __init__(self, func, nargs):
-        assert type(func) == ILFunction
+        assert type(func) == Function
         assert type(nargs) == int
         self.func = func
         self.nargs = nargs
@@ -185,24 +185,24 @@ class ILCallStmt(object):
     def __repr__(self):
         return 'call %s, %d' % (self.func.name, self.nargs)
 
-class IRReturnStmt(object):
+class ReturnStmt(object):
     def __repr__(self):
         return 'return'
 
-class ILRefStmt(object): # basically &x operator
+class RefStmt(object): # basically &x operator
     def __init__(self, dst, var):
-        assert type(dst) == ILVariable
-        assert type(var) == ILVariable
+        assert type(dst) == Variable
+        assert type(var) == Variable
         self.dst = dst
         self.var = var
 
     def __repr__(self):
         return '%s = &%s' % (self.dst, self.var)
 
-class ILDerefStmt(object): # basically *x operator
+class DerefStmt(object): # basically *x operator
     def __init__(self, dst, ptr):
-        assert type(dst) == ILVariable
-        assert type(ptr) == ILVariable
+        assert type(dst) == Variable
+        assert type(ptr) == Variable
         self.dst = dst
         self.ptr = ptr
 
@@ -210,7 +210,7 @@ class ILDerefStmt(object): # basically *x operator
         return '%s = *%s' % (self.dst, self.ptr)
 
 
-class ILFunction(object):
+class Function(object):
     def __init__(self, name, params, retval):
         """
         :param name: name of the function

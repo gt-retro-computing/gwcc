@@ -97,7 +97,7 @@ class Compiler(object):
 
             if self.cur_func: # we are in a function -> this is a local decl.
                 # handle initializer if there is one
-                il_var = il.ILVariable('_local_' + str(self.current_scope_depth) + '_' + node.name, self.c_ast_type_to_il_type(node.type.type))
+                il_var = il.Variable('_local_' + str(self.current_scope_depth) + '_' + node.name, self.c_ast_type_to_il_type(node.type.type))
                 self.cur_func_c_locals[node] = il_var
                 print 'new decl ' + str(node)
                 return il_var
@@ -105,16 +105,16 @@ class Compiler(object):
     def new_temporary(self, typ):
         assert self.cur_func
         name = 't' + str(len(self.cur_func_temporaries))
-        il_var = il.ILVariable(name, typ)
+        il_var = il.Variable(name, typ)
         self.cur_func_temporaries[il_var] = il_var
         return il_var
 
     def assign(self, dst, src):
-        assert type(dst) == il.ILVariable
-        assert type(src) == il.ILVariable
+        assert type(dst) == il.Variable
+        assert type(src) == il.Variable
         if dst.type != src.type:
-            return il.ILCastStmt(dst, src)
-        return il.ILUnaryStmt(self.cur_func_retvar, il.ILUnaryOp.Identity, src)
+            return il.CastStmt(dst, src)
+        return il.UnaryStmt(self.cur_func_retvar, il.UnaryOp.Identity, src)
 
     def on_funcdef(self, node):
         assert type(node) == c_ast.FuncDef
@@ -127,13 +127,13 @@ class Compiler(object):
         self.cur_func_temporaries = {}
 
         # return val
-        self.cur_func_retvar = il.ILVariable('_retval', self.c_ast_type_to_il_type(func_decl.type.type.type))
+        self.cur_func_retvar = il.Variable('_retval', self.c_ast_type_to_il_type(func_decl.type.type.type))
         # process parameters
         argvars = []
         for param_decl in func_decl.type.args.params:
             argvars.append(self.on_decl(param_decl))
 
-        self.cur_func = il.ILFunction(func_decl.name, argvars, self.cur_func_retvar)
+        self.cur_func = il.Function(func_decl.name, argvars, self.cur_func_retvar)
 
         # process body
         self.descend_into(node.body)
@@ -168,11 +168,11 @@ class Compiler(object):
         srcB = self.on_expr(node.right)
         op = node.op
         if op == '+':
-            il_op = il.ILBinaryOp.Add
+            il_op = il.BinaryOp.Add
         elif op == '-':
-            il_op = il.ILBinaryOp.Sub
+            il_op = il.BinaryOp.Sub
         elif op == '*':
-            il_op = il.ILBinaryOp.Mul
+            il_op = il.BinaryOp.Mul
         else:
             raise ValueError('unsupported binary operation ' + op)
 
@@ -180,12 +180,12 @@ class Compiler(object):
         if srcA.type == srcB.type:
             srcA_casted = srcA
             srcB_casted = srcB
-        elif il.ILTypes.is_less_than(a_type, b_type):
+        elif il.Types.is_less_than(a_type, b_type):
             srcA_casted = self.new_temporary(b_type)
             cast_stmt = self.assign(srcA_casted, srcA)
             self.cur_func.add_stmt(cast_stmt)
             srcB_casted = srcB
-        elif il.ILTypes.is_less_than(b_type, a_type):
+        elif il.Types.is_less_than(b_type, a_type):
             srcA_casted = srcA
             srcB_casted = self.new_temporary(a_type)
             cast_stmt = self.assign(srcB_casted, srcB)
@@ -194,7 +194,7 @@ class Compiler(object):
             assert False # wtf
 
         new_var = self.new_temporary(srcA_casted.type)
-        new_stmt = il.ILBinaryStmt(new_var, il_op, srcA_casted, srcB_casted)
+        new_stmt = il.BinaryStmt(new_var, il_op, srcA_casted, srcB_casted)
         self.cur_func.add_stmt(new_stmt)
         return new_var
 
@@ -287,30 +287,30 @@ class Compiler(object):
             signedness, decl_size, decl_type = Compiler.interpret_identifier_type(node.names)
             unsigned = signedness == 'unsigned'
             if decl_type == 'char':
-                return il.ILTypes.uchar if unsigned else il.ILTypes.char
+                return il.Types.uchar if unsigned else il.Types.char
             elif decl_type == 'int':
                 if decl_size == 'short':
-                    return il.ILTypes.ushort if unsigned else il.ILTypes.short
+                    return il.Types.ushort if unsigned else il.Types.short
                 elif decl_size == 'long':
-                    return il.ILTypes.ulong if unsigned else il.ILTypes.long
+                    return il.Types.ulong if unsigned else il.Types.long
                 elif decl_size == 'longlong':
-                    return il.ILTypes.ulonglong if unsigned else il.ILTypes.longlong
+                    return il.Types.ulonglong if unsigned else il.Types.longlong
                 else:
-                    return il.ILTypes.uint if unsigned else il.ILTypes.int
+                    return il.Types.uint if unsigned else il.Types.int
             elif decl_type == 'void':
-                return il.ILTypes.void
+                return il.Types.void
             elif decl_type == 'float':
-                return il.ILTypes.float
+                return il.Types.float
             elif decl_type == 'double':
                 if decl_size == 'long':
-                    return il.ILTypes.longdouble
+                    return il.Types.longdouble
                 else:
-                    return il.ILTypes.double
+                    return il.Types.double
             else:
                 # try to resolve
                 return self.c_ast_type_to_il_type(self.current_scope.resolve_basetype(decl_type))
         elif type(node) == c_ast.PtrDecl:
-            return il.ILTypes.ptr
+            return il.Types.ptr
         else:
             raise RuntimeError("unsupported ast type decl " + str(node))
 
