@@ -8,9 +8,10 @@ import il
 import cfg
 
 class Scope(object):
-    def __init__(self, height = 0, parent=None):
+    def __init__(self, name, height = 0, parent=None):
         self.symbols = {}
         self.types = {} # typedefs
+        self.name = name
         self.height = height
         self.parent = parent
 
@@ -43,7 +44,8 @@ class Scope(object):
 
 class Compiler(object):
     def __init__(self, arch):
-        self.scope_stack = [ Scope() ]
+        self._scope_stack = [Scope('global')]
+        self._scope_cnt = 0
         self.target_arch = arch
 
         self.cur_func = None
@@ -53,21 +55,19 @@ class Compiler(object):
 
     @property
     def current_scope(self):
-        return self.scope_stack[-1]
-
-    @property
-    def current_scope_depth(self):
-        return len(self.scope_stack)
+        return self._scope_stack[-1]
 
     def scope_push(self):
-        new_scope = Scope(self.current_scope.height + 1, self.current_scope)
-        self.scope_stack.append(new_scope)
+        scope_name = 'local_%s' % (self._scope_cnt,)
+        self._scope_cnt += 1
+        new_scope = Scope(scope_name, self.current_scope.height + 1, self.current_scope)
+        self._scope_stack.append(new_scope)
         return new_scope
 
     def scope_pop(self, verify=None):
         if verify:
             assert self.current_scope == verify
-        return self.scope_stack.pop()
+        return self._scope_stack.pop()
 
     def on_compound_node(self, compound):
         """
@@ -116,7 +116,7 @@ class Compiler(object):
                     print 'local declared: %s' % (node.name,)
                     ref_level, ref_type = 0, None
 
-                tmpvar_name = '_local_' + str(self.current_scope_depth) + '_' + node.name
+                tmpvar_name = '_' + str(self.current_scope.name) + '_' + node.name
                 il_var = il.Variable(tmpvar_name, var_type, ref_level, ref_type)
                 self.cur_func_c_locals[node] = il_var
 
