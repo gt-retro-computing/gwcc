@@ -165,7 +165,7 @@ class ComparisonOp(Enum):
     Leq = '<='
     Geq = '>='
 
-class CondJump(object):
+class CondJumpStmt(object):
     def __init__(self, true_block, false_block, srcA, op, imm):
         assert type(true_block) == BasicBlock
         assert type(false_block) == BasicBlock
@@ -291,12 +291,23 @@ class Function(object):
     def verify(self):
         # ensure that all jumps reference valid basicblocks
         for bb in self.cfg.basic_blocks:
+            if not bb.stmts:
+                continue
+
             for stmt in bb.stmts:
                 if type(stmt) == GotoStmt:
                     assert stmt.dst_block in self.cfg.basic_blocks
-                elif type(stmt) == CondJump:
+                    assert len(self.cfg.get_edges(bb)) == 1
+                    assert next(iter(self.cfg.get_edges(bb))).dst == stmt.dst_block
+                elif type(stmt) == CondJumpStmt:
                     assert stmt.true_block in self.cfg.basic_blocks
                     assert stmt.false_block in self.cfg.basic_blocks
+                    assert len(self.cfg.get_edges(bb)) == 2
+                    dsts = map(lambda e: e.dst, self.cfg.get_edges(bb))
+                    assert stmt.true_block in dsts and stmt.false_block in dsts
+
+            last_stmt = bb.stmts[-1]
+            assert type(last_stmt) in [GotoStmt, CondJumpStmt, ReturnStmt]
 
         # todo: verify def/use chains are valid
 

@@ -91,7 +91,7 @@ class Compiler(object):
         self.cur_block.add_stmt(stmt)
         if type(stmt) == il.GotoStmt:
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.dst_block))
-        elif type(stmt) == il.CondJump:
+        elif type(stmt) == il.CondJumpStmt:
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.true_block))
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.false_block))
 
@@ -209,7 +209,7 @@ class Compiler(object):
             false_block = self.cur_func.cfg.new_block()
         else:
             false_block = end_block
-        self.add_stmt(il.CondJump(true_block, false_block, cond_val, il.ComparisonOp.Neq, il.Constant(0, cond_val.type)))
+        self.add_stmt(il.CondJumpStmt(true_block, false_block, cond_val, il.ComparisonOp.Neq, il.Constant(0, cond_val.type)))
 
         # handle iftrue
         self.cur_block = true_block
@@ -333,7 +333,7 @@ class Compiler(object):
         # handle cond
         self.cur_block = cond_block
         cond_var = self.on_expr_node(node.cond)
-        self.add_stmt(il.CondJump(stmt_block, end_block, cond_var, il.ComparisonOp.Neq, il.Constant(0, cond_var.type)))
+        self.add_stmt(il.CondJumpStmt(stmt_block, end_block, cond_var, il.ComparisonOp.Neq, il.Constant(0, cond_var.type)))
 
         # handle stmt
         self.cur_block = stmt_block
