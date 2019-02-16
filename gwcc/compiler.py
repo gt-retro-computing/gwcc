@@ -5,6 +5,7 @@ This compiler brought to you by gangweed ganggang
 
 from pycparser import c_ast
 import il
+import cfg
 
 class Scope(object):
     def __init__(self, height = 0, parent=None):
@@ -46,8 +47,9 @@ class Compiler(object):
         self.target_arch = arch
 
         self.cur_func = None
+        self.cur_block = None
         self.cur_func_c_locals = None # map from ast data to IRVariable
-        self.loop_stack = None # stack of tuples (cond_label, end_label) for continue and break statements
+        self.loop_stack = None # stack of tuples (cond_block, end_block) for continue and break statements
 
     @property
     def current_scope(self):
@@ -84,6 +86,15 @@ class Compiler(object):
         typedef_name = node.name
         self.current_scope.types[typedef_name] = node.type.type
 
+    def add_stmt(self, stmt):
+        assert self.cur_func
+        self.cur_block.add_stmt(stmt)
+        if type(stmt) == il.GotoStmt:
+            self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.dst_block))
+        elif type(stmt) == il.CondJump:
+            self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.true_block))
+            self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.false_block))
+
     def on_decl_node(self, node):
         """
         :param node: c_ast.Decl node
@@ -111,9 +122,12 @@ class Compiler(object):
 
                 if node.init:
                     init_expr_var = self.on_expr_node(node.init)
-                    self.cur_func.add_stmt(self.on_assign(il_var, init_expr_var))
+                    self.add_stmt(self.on_assign(il_var, init_expr_var))
 
                 return il_var
+            else:
+                raise RuntimeError('globals not supported yet')
+
 
     def duplicate_var(self, var):
         """
@@ -167,16 +181,18 @@ class Compiler(object):
             argvars.append(self.on_decl_node(param_decl))
 
         self.cur_func = il.Function(func_decl.name, argvars, retvar)
+        self.cur_block = self.cur_func.cfg.new_block()
 
         # process body
         self.on_compound_node(node.body)
         print
-        print '\n'.join(map(str,self.cur_func.stmts))
+        print str(self.cur_func)
         self.cur_func.verify() # integrity check coz i am stupid
 
         # exit scope
         self.scope_pop(new_scope)
         self.cur_func = None
+        self.cur_block = None
         self.cur_func_c_locals = None
         self.loop_stack = None
 
@@ -185,27 +201,39 @@ class Compiler(object):
 
         # handle cond
         cond_val = self.on_expr_node(node.cond)
-        true_branch_lbl = self.cur_func.new_label()
-        end_lbl = self.cur_func.new_label()
-        self.cur_func.add_stmt(il.CondJump(true_branch_lbl, cond_val, il.ComparisonOp.Neq, il.Constant(0, cond_val.type)))
+
+        # generate control flow
+        true_block = self.cur_func.cfg.new_block()
+        end_block = self.cur_func.cfg.new_block()
+        if node.iffalse:
+            false_block = self.cur_func.cfg.new_block()
+        else:
+            false_block = end_block
+        self.add_stmt(il.CondJump(true_block, false_block, cond_val, il.ComparisonOp.Neq, il.Constant(0, cond_val.type)))
+
+        # handle iftrue
+        self.cur_block = true_block
+        self.on_stmt_node(node.iftrue)
+        self.cur_block = true_block
+        self.add_stmt(il.GotoStmt(end_block))
 
         # handle iffalse
         if node.iffalse:
+            self.cur_block = false_block
             self.on_stmt_node(node.iffalse)
-        self.cur_func.add_stmt(il.GotoStmt(end_lbl))
+            self.cur_block = false_block
+            self.add_stmt(il.GotoStmt(end_block))
 
-        self.cur_func.place_label(true_branch_lbl)
-        # handle iftrue
-        self.on_stmt_node(node.iftrue)
-
-        self.cur_func.place_label(end_lbl)
+        self.cur_block = end_block
 
     def on_return_node(self, node):
         assert type(node) == c_ast.Return
         assert self.cur_func.retval
         retval = self.on_expr_node(node.expr)
+        self.add_stmt(self.on_assign(self.cur_func.retval, retval))
+        self.add_stmt(il.ReturnStmt())
 
-        self.cur_func.add_stmt(self.on_assign(self.cur_func.retval, retval))
+        self.cur_block = self.cur_func.cfg.new_block()
 
     def on_binary_op_node(self, node):
         srcA = self.on_expr_node(node.left)
@@ -238,19 +266,19 @@ class Compiler(object):
         elif il.Types.is_less_than(a_type, b_type):
             srcA_casted = self.duplicate_var(srcB)
             cast_stmt = self.on_assign(srcA_casted, srcA)
-            self.cur_func.add_stmt(cast_stmt)
+            self.add_stmt(cast_stmt)
             srcB_casted = srcB
         elif il.Types.is_less_than(b_type, a_type):
             srcA_casted = srcA
             srcB_casted = self.duplicate_var(srcA)
             cast_stmt = self.on_assign(srcB_casted, srcB)
-            self.cur_func.add_stmt(cast_stmt)
+            self.add_stmt(cast_stmt)
         else:
             assert False # wtf
 
         new_var = self.duplicate_var(srcA_casted)
         new_stmt = il.BinaryStmt(new_var, il_op, srcA_casted, srcB_casted)
-        self.cur_func.add_stmt(new_stmt)
+        self.add_stmt(new_stmt)
         return new_var
 
     def on_dereference(self, ptr_var):
@@ -260,14 +288,14 @@ class Compiler(object):
             dst_var = self.cur_func.new_temporary(il.Types.ptr, ptr_var.ref_level - 1, ptr_var.ref_type)
         else:
             dst_var = self.cur_func.new_temporary(ptr_var.ref_type, 0, None)
-        self.cur_func.add_stmt(il.DerefReadStmt(dst_var, ptr_var))
+        self.add_stmt(il.DerefReadStmt(dst_var, ptr_var))
         return dst_var
 
     def on_reference(self, var):
         assert type(var) == il.Variable
         ref_type = var.type if var.ref_level == 0 else var.ref_type
         dst_var = self.cur_func.new_temporary(il.Types.ptr, var.ref_level + 1, ref_type)
-        self.cur_func.add_stmt(il.RefStmt(dst_var, var))
+        self.add_stmt(il.RefStmt(dst_var, var))
         return dst_var
 
     def on_assign_node(self, node): # assignment EXRESSION
@@ -286,9 +314,9 @@ class Compiler(object):
             rhs_value = self.on_binary_op(lhs_value, rhs_value, op)
 
         if is_ptr:
-            self.cur_func.add_stmt(il.DerefWriteStmt(lhs, rhs_value))
+            self.add_stmt(il.DerefWriteStmt(lhs, rhs_value))
         else:
-            self.cur_func.add_stmt(self.on_assign(lhs, rhs_value))
+            self.add_stmt(self.on_assign(lhs, rhs_value))
 
         # rhs_value is a variable which holds the newly-stored value
         assert type(rhs_value) == il.Variable
@@ -297,22 +325,25 @@ class Compiler(object):
     def on_while(self, node):
         assert type(node) == c_ast.While
 
-        start_lbl = self.cur_func.new_label()
-        end_lbl = self.cur_func.new_label()
-        self.loop_stack.append((start_lbl, end_lbl))
-        self.cur_func.place_label(start_lbl)
+        cond_block = self.cur_func.cfg.new_block() # block holding loop conditional
+        stmt_block = self.cur_func.cfg.new_block() # block holding loop body
+        end_block = self.cur_func.cfg.new_block() # next block after loop
+        self.add_stmt(il.GotoStmt(cond_block))
 
         # handle cond
+        self.cur_block = cond_block
         cond_var = self.on_expr_node(node.cond)
-        self.cur_func.add_stmt(il.CondJump(end_lbl, cond_var, il.ComparisonOp.Equ, il.Constant(0, cond_var.type)))
+        self.add_stmt(il.CondJump(stmt_block, end_block, cond_var, il.ComparisonOp.Neq, il.Constant(0, cond_var.type)))
 
         # handle stmt
+        self.cur_block = stmt_block
+        self.loop_stack.append((cond_block, end_block))
         self.on_stmt_node(node.stmt)
-        self.cur_func.add_stmt(il.GotoStmt(start_lbl))
-
-        self.cur_func.place_label(end_lbl)
+        self.cur_block = stmt_block
+        self.add_stmt(il.GotoStmt(cond_block))
 
         self.loop_stack.pop()
+        self.cur_block = end_block
 
     # nodes that do not evaluate
     def on_stmt_node(self, node):
@@ -349,8 +380,9 @@ class Compiler(object):
             raise SyntaxError("use of 'continue' outside of function")
         if not self.loop_stack:
             raise SyntaxError("use of 'continue' outside of loop")
-        start_lbl, end_lbl = self.loop_stack[-1]
-        self.cur_func.add_stmt(il.GotoStmt(start_lbl))
+        start_block, end_block = self.loop_stack[-1]
+        self.add_stmt(il.GotoStmt(start_block))
+        self.cur_block = self.cur_func.cfg.new_block()
 
 
     def on_break_node(self, node):
@@ -360,13 +392,14 @@ class Compiler(object):
             raise SyntaxError("use of 'break' outside of function")
         if not self.loop_stack:
             raise SyntaxError("use of 'break' outside of loop")
-        start_lbl, end_lbl = self.loop_stack[-1]
-        self.cur_func.add_stmt(il.GotoStmt(end_lbl))
+        start_block, end_block = self.loop_stack[-1]
+        self.add_stmt(il.GotoStmt(end_block))
+        self.cur_block = self.cur_func.cfg.new_block()
 
     def on_constant(self, const_type, value):
         il_var = self.cur_func.new_temporary(const_type, 0, None)
         assign_stmt = self.on_assign(il_var, il.Constant(value, const_type))
-        self.cur_func.add_stmt(assign_stmt)
+        self.add_stmt(assign_stmt)
         return il_var
 
     def on_constant_node(self, node):
@@ -411,7 +444,7 @@ class Compiler(object):
             il_op = Compiler.parse_unary_op(node.op)
             dst_var = self.duplicate_var(expr_var)
             new_stmt = il.UnaryStmt(dst_var, il_op, expr_var)
-            self.cur_func.add_stmt(new_stmt)
+            self.add_stmt(new_stmt)
             return dst_var
 
     @staticmethod
@@ -428,7 +461,7 @@ class Compiler(object):
             raise SyntaxError('use of undeclared symbol ' + node.name)
         if scope.height == 0:
             # global
-            assert False
+            raise RuntimeError('globals not supported yet')
         else:
             il_var = self.cur_func_c_locals[ast_decl]
             return il_var

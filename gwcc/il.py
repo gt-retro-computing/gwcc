@@ -3,6 +3,7 @@ A simple 3-address code IL for compiling C code.
 """
 
 from enum import Enum
+from cfg import ControlFlowGraph, BasicBlock
 
 class Types(Enum):
     char = 0
@@ -148,21 +149,13 @@ class CastStmt(object):
     def __repr__(self):
         return '%s = (%s) %s' % (self.dst, self.dst.type, self.src)
 
-class Label(object):
-    def __init__(self, name):
-        self.name = name
-        self._idx = None
-
-    def __repr__(self):
-        return self.name
-
 class GotoStmt(object):
-    def __init__(self, label):
-        assert type(label) == Label
-        self.label = label
+    def __init__(self, dst_block):
+        assert type(dst_block) == BasicBlock
+        self.dst_block = dst_block
 
     def __repr__(self):
-        return 'goto %s' % (self.label,)
+        return 'goto %s' % (self.dst_block,)
 
 class ComparisonOp(Enum):
     Equ = '=='
@@ -173,20 +166,22 @@ class ComparisonOp(Enum):
     Geq = '>='
 
 class CondJump(object):
-    def __init__(self, label, srcA, op, imm):
-        assert type(label) == Label
+    def __init__(self, true_block, false_block, srcA, op, imm):
+        assert type(true_block) == BasicBlock
+        assert type(false_block) == BasicBlock
         assert type(srcA) == Variable
         assert op.parent == ComparisonOp
         assert type(imm) == Constant
         if srcA.type != imm.type:
             raise ValueError('Conditional jump statement operands must be of equal type')
-        self.label = label
+        self.true_block = true_block
+        self.false_block = false_block
         self.srcA = srcA
         self.op = op
         self.imm = imm
 
     def __repr__(self):
-        return 'if (%s %s %s) goto %s' % (self.srcA, self.op, self.imm, self.label)
+        return 'if (%s %s %s) goto %s else goto %s' % (self.srcA, self.op, self.imm, self.true_block, self.false_block)
 
 class ParamStmt(object):
     def __init__(self, arg):
@@ -281,27 +276,11 @@ class Function(object):
         self.locals_size = 0
         self.locals = []
 
-        self.stmts = []
-        self.labels = []
+        self.cfg = ControlFlowGraph()
 
     @property
     def num_args(self):
         return len(self.params)
-
-    def add_stmt(self, stmt):
-        if type(stmt) == Label:
-            raise ValueError('use place_label to add the label here, not add_stmt')
-        self.stmts.append(stmt)
-
-    def place_label(self, label):
-        assert type(label) == Label
-        label._idx = len(self.stmts)
-        self.stmts.append(label)
-
-    def new_label(self):
-        label = Label('L%d' % (len(self.labels)))
-        self.labels.append(label)
-        return label
 
     def new_temporary(self, typ, ref_level, ref_type):
         name = 't' + str(len(self.temporaries))
@@ -310,13 +289,18 @@ class Function(object):
         return il_var
 
     def verify(self):
-        # ensure that all labels are placed
-        for label in self.labels:
-            assert label in self.stmts
-
-        # ensure that all jumps reference valid labels
-        for stmt in self.stmts:
-            if type(stmt) == GotoStmt or type(stmt) == CondJump:
-                assert stmt.label in self.labels
+        # ensure that all jumps reference valid basicblocks
+        for bb in self.cfg.basic_blocks:
+            for stmt in bb.stmts:
+                if type(stmt) == GotoStmt:
+                    assert stmt.dst_block in self.cfg.basic_blocks
+                elif type(stmt) == CondJump:
+                    assert stmt.true_block in self.cfg.basic_blocks
+                    assert stmt.false_block in self.cfg.basic_blocks
 
         # todo: verify def/use chains are valid
+
+    def __str__(self):
+        result = 'Function %s(%s) -> %s\n' % (self.name, ', '.join(map(str, self.params)), self.retval)
+        result += self.cfg.pretty_print()
+        return result
