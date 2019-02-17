@@ -53,7 +53,12 @@ class ControlFlowGraph(object):
 
     def remove_block(self, bb):
         self.basic_blocks.remove(bb)
+        for outgoing_edge in self._edges[bb]:
+            self._reverse_edges[outgoing_edge.dst].remove(outgoing_edge)
         del self._edges[bb]
+
+        for incoming_edge in self._reverse_edges[bb]:
+            self._edges[incoming_edge.src].remove(incoming_edge)
         del self._reverse_edges[bb]
 
     def get_edges(self, bb):
@@ -86,12 +91,11 @@ class ControlFlowGraph(object):
 
 def postorder(cfg):
     if not cfg.basic_blocks:
-        return []
+        return
 
     if not cfg.entry:
         raise ValueError('cfg has no entry')
 
-    result = []
     coloring = {}
     stack = [cfg.entry]
     while stack:
@@ -103,10 +107,9 @@ def postorder(cfg):
                     stack.append(e.dst)
         elif coloring[v] == 1: # gray
             coloring[v] = 2 # set to black
-            result.append(v)
+            yield v
         elif coloring[v] == 2: # black
             stack.pop()
-    return result
 
 def topoorder(cfg):
-    return list(reversed(postorder(cfg)))
+    return list(reversed(list(postorder(cfg))))

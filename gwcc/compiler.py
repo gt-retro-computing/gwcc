@@ -6,6 +6,7 @@ This compiler brought to you by gangweed ganggang
 from pycparser import c_ast
 import il
 import cfg
+from gwcc.optimization.naturalization_pass import NaturalizationPass
 
 class Scope(object):
     def __init__(self, name, height = 0, parent=None):
@@ -113,9 +114,9 @@ class Compiler(object):
                 var_type = self.get_node_type(node.type)
                 if var_type == il.Types.ptr:
                     ref_level, ref_type = self.extract_pointer_type(node.type)
-                    print 'pointer declared: %s %d %s' % (node.name, ref_level, ref_type)
+                    # print 'pointer declared: %s %d %s' % (node.name, ref_level, ref_type)
                 else:
-                    print 'local declared: %s' % (node.name,)
+                    # print 'local declared: %s' % (node.name,)
                     ref_level, ref_type = 0, None
 
                 tmpvar_name = '_' + str(self.current_scope.name) + '_' + node.name
@@ -187,9 +188,14 @@ class Compiler(object):
 
         # process body
         self.on_compound_node(node.body)
+        self.cur_func.verify() # integrity check coz i am stupid
+
+        NaturalizationPass(self.cur_func).process()
+
         print
         print str(self.cur_func)
         self.cur_func.verify() # integrity check coz i am stupid
+
 
         # exit scope
         self.scope_pop(new_scope)

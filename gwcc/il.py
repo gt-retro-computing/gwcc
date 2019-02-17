@@ -294,20 +294,27 @@ class Function(object):
             if not bb.stmts:
                 continue
 
-            for stmt in bb.stmts:
-                if type(stmt) == GotoStmt:
-                    assert stmt.dst_block in self.cfg.basic_blocks
-                    assert len(self.cfg.get_edges(bb)) == 1
-                    assert next(iter(self.cfg.get_edges(bb))).dst == stmt.dst_block
-                elif type(stmt) == CondJumpStmt:
-                    assert stmt.true_block in self.cfg.basic_blocks
-                    assert stmt.false_block in self.cfg.basic_blocks
-                    assert len(self.cfg.get_edges(bb)) == 2
-                    dsts = map(lambda e: e.dst, self.cfg.get_edges(bb))
-                    assert stmt.true_block in dsts and stmt.false_block in dsts
+            control_flow_stmts = [GotoStmt, CondJumpStmt, ReturnStmt]
+            for i in range(len(bb.stmts) - 1):
+                assert type(bb.stmts[i]) not in control_flow_stmts
 
             last_stmt = bb.stmts[-1]
-            assert type(last_stmt) in [GotoStmt, CondJumpStmt, ReturnStmt]
+            assert type(last_stmt) in control_flow_stmts
+            if type(last_stmt) == GotoStmt:
+                assert last_stmt.dst_block in self.cfg.basic_blocks
+                assert len(self.cfg.get_edges(bb)) == 1
+                assert next(iter(self.cfg.get_edges(bb))).dst == last_stmt.dst_block
+            elif type(last_stmt) == CondJumpStmt:
+                assert last_stmt.true_block in self.cfg.basic_blocks
+                assert last_stmt.false_block in self.cfg.basic_blocks
+                if last_stmt.true_block != last_stmt.false_block:
+                    assert len(self.cfg.get_edges(bb)) == 2
+                else:
+                    assert len(self.cfg.get_edges(bb)) == 1
+                dsts = map(lambda e: e.dst, self.cfg.get_edges(bb))
+                assert last_stmt.true_block in dsts and last_stmt.false_block in dsts
+            elif type(last_stmt) == ReturnStmt:
+                assert len(self.cfg.get_edges(bb)) == 0
 
         # todo: verify def/use chains are valid
 
