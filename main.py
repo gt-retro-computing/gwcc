@@ -1,6 +1,7 @@
 from pycparser import parse_file, c_parser
 import gwcc
 import platform
+import argparse
 from gwcc.abi.lc3 import LC3
 
 from gwcc.optimization.dataflow import LivenessAnalysis
@@ -15,12 +16,16 @@ def banner():
 if __name__ == '__main__':
     banner()
 
+    args_parser = argparse.ArgumentParser()
+    args_parser.add_argument('source_file', default='testcases/1.c', nargs='?')
+    args = args_parser.parse_args()
+
     parser = c_parser.CParser()
 
     if platform.system() == 'Darwin':
-        ast = parse_file('testcases/1.c', use_cpp=True, cpp_path='clang', cpp_args='-E')
+        ast = parse_file(args.source_file, use_cpp=True, cpp_path='clang', cpp_args='-E')
     else:
-        ast = parse_file('testcases/1.c', use_cpp=True)
+        ast = parse_file(args.source_file, use_cpp=True)
 
     frontend = gwcc.Frontend(LC3)
     frontend.compile(ast)
