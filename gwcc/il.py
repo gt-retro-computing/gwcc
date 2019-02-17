@@ -123,17 +123,6 @@ class UnaryOp(Enum):
     Negate = '~'
     Minus = '-'
 
-class ConstantStmt(object):
-    def __init__(self, dst, imm):
-        assert type(dst) == Variable
-        if dst.type != imm.type:
-            raise ValueError('Constant load statement operands must be of equal type')
-        self.dst = dst
-        self.imm = imm
-
-    def __repr__(self):
-        return '%s = %s' % (self.dst, self.imm)
-
 class UnaryStmt(object):
     def __init__(self, dst, op, src):
         assert type(dst) == Variable
@@ -147,6 +136,17 @@ class UnaryStmt(object):
 
     def __repr__(self):
         return '%s = %s%s' % (self.dst, self.op, self.src)
+
+class ConstantStmt(object):
+    def __init__(self, dst, imm):
+        assert type(dst) == Variable
+        if dst.type != imm.type:
+            raise ValueError('Constant load statement operands must be of equal type')
+        self.dst = dst
+        self.imm = imm
+
+    def __repr__(self):
+        return '%s = %s' % (self.dst, self.imm)
 
 class CastStmt(object):
     def __init__(self, dst, src):
@@ -201,14 +201,16 @@ class ParamStmt(object):
         return 'param %s' % (self.arg,)
 
 class CallStmt(object):
-    def __init__(self, func, nargs):
+    def __init__(self, dst, func, nargs):
+        assert type(dst) == Variable
         assert type(func) == Function
         assert type(nargs) == int
+        self.dst = dst
         self.func = func
         self.nargs = nargs
 
     def __repr__(self):
-        return 'call %s, %d' % (self.func.name, self.nargs)
+        return '%s = call %s, %d' % (self.dst, self.func.name, self.nargs)
 
 class ReturnStmt(object):
     def __repr__(self):
@@ -242,19 +244,19 @@ class DerefReadStmt(object): # basically *x operator
         return '%s = *%s' % (self.dst, self.ptr)
 
 class DerefWriteStmt(object): # basically *x operator
-    def __init__(self, ptr, dst):
+    def __init__(self, ptr, src):
         assert type(ptr) == Variable
-        assert type(dst) == Variable
+        assert type(src) == Variable
 
-        if dst.ref_level != ptr.ref_level - 1:
-            raise ValueError('inconsistent reference levels %d and %d' % (dst.ref_level, ptr.ref_level))
-        if dst.ref_level == 0 and dst.type != ptr.ref_type:
+        if src.ref_level != ptr.ref_level - 1:
+            raise ValueError('inconsistent reference levels %d and %d' % (src.ref_level, ptr.ref_level))
+        if src.ref_level == 0 and src.type != ptr.ref_type:
             raise ValueError('inconsistent dereferenced type')
-        if dst.ref_level > 0 and dst.ref_type != ptr.ref_type:
+        if src.ref_level > 0 and src.ref_type != ptr.ref_type:
             raise ValueError('inconsistent referenced type')
 
         self.ptr = ptr
-        self.dst = dst
+        self.dst = src
 
     def __repr__(self):
         return '*%s = %s' % (self.ptr, self.dst)
@@ -268,6 +270,66 @@ class CommentStmt(object):
 
     def __repr__(self):
         return self.text
+
+def used_vars(stmt):
+    typ = type(stmt)
+    if typ == BinaryStmt:
+        return [stmt.srcA, stmt.srcB]
+    elif typ == UnaryStmt:
+        return [stmt.src]
+    elif typ == ConstantStmt:
+        return []
+    elif typ == CastStmt:
+        return [stmt.src]
+    elif typ == GotoStmt:
+        return []
+    elif typ == CondJumpStmt:
+        return [stmt.srcA]
+    elif typ == ParamStmt:
+        return [stmt.arg]
+    elif typ == CallStmt:
+        return []
+    elif typ == ReturnStmt:
+        return []
+    elif typ == RefStmt:
+        return [stmt.var]
+    elif typ == DerefReadStmt:
+        return [stmt.ptr]
+    elif typ == DerefWriteStmt:
+        return [stmt.src]
+    elif typ == CommentStmt:
+        return []
+    else:
+        raise ValueError('invalid IL statement: ' + str(stmt))
+
+def defed_var(stmt):
+    typ = type(stmt)
+    if typ == BinaryStmt:
+        return stmt.dst
+    elif typ == UnaryStmt:
+        return stmt.dst
+    elif typ == ConstantStmt:
+        return stmt.dst
+    elif typ == CastStmt:
+        return stmt.dst
+    elif typ == GotoStmt:
+        return None
+    elif typ == CondJumpStmt:
+        return None
+    elif typ == ParamStmt:
+        return None
+    elif typ == CallStmt:
+        return stmt.dst
+    elif typ == ReturnStmt:
+        return None
+    elif typ == RefStmt:
+        return stmt.dst
+    elif typ == DerefReadStmt:
+        return stmt.dst
+    elif typ == DerefWriteStmt:
+        return stmt.dst
+    elif typ == CommentStmt:
+        return None
 
 class Function(object):
     def __init__(self, name, params, retval):
