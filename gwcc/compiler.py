@@ -91,9 +91,11 @@ class Compiler(object):
         self.cur_block.add_stmt(stmt)
         if type(stmt) == il.GotoStmt:
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.dst_block))
+            self.cur_block = self.cur_func.cfg.new_block()
         elif type(stmt) == il.CondJumpStmt:
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.true_block))
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.false_block))
+            self.cur_block = self.cur_func.cfg.new_block()
 
     def on_decl_node(self, node):
         """
@@ -214,14 +216,12 @@ class Compiler(object):
         # handle iftrue
         self.cur_block = true_block
         self.on_stmt_node(node.iftrue)
-        self.cur_block = true_block
         self.add_stmt(il.GotoStmt(end_block))
 
         # handle iffalse
         if node.iffalse:
             self.cur_block = false_block
             self.on_stmt_node(node.iffalse)
-            self.cur_block = false_block
             self.add_stmt(il.GotoStmt(end_block))
 
         self.cur_block = end_block
@@ -339,7 +339,6 @@ class Compiler(object):
         self.cur_block = stmt_block
         self.loop_stack.append((cond_block, end_block))
         self.on_stmt_node(node.stmt)
-        self.cur_block = stmt_block
         self.add_stmt(il.GotoStmt(cond_block))
 
         self.loop_stack.pop()
