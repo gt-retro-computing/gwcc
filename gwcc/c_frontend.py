@@ -58,6 +58,7 @@ class Frontend(object):
 
         # output
         self._functions = []
+        self._globals = []
         self._compiled = False
 
     @property
@@ -65,6 +66,12 @@ class Frontend(object):
         if not self._compiled:
             raise RuntimeError('input has not been compiled yet')
         return self._functions
+
+    @property
+    def globals(self):
+        if not self._compiled:
+            raise RuntimeError('input has not been compiled yet')
+        return self._globals
 
     @property
     def current_scope(self):

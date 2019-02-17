@@ -1,8 +1,5 @@
 from pycparser import parse_file, c_parser
 import gwcc
-from gwcc.abi.lc3 import LC3
-
-from gwcc.optimization.dataflow import LivenessAnalysis
 
 def banner():
     print 'The Gangweed Retargetable C Compiler [Version %s]' % (gwcc.__version__,)
@@ -14,9 +11,11 @@ if __name__ == '__main__':
 
     parser = c_parser.CParser()
     ast = parse_file('testcases/1.c', use_cpp=True)
-    frontend = gwcc.Frontend(LC3)
+    frontend = gwcc.Frontend(gwcc.abi.LC3)
     frontend.compile(ast)
 
     for func in frontend.functions:
         print func.pretty_print()
-        liveness = LivenessAnalysis(func).compute_liveness()
+
+    backend = gwcc.backend.LC3(frontend.globals, frontend.functions)
+    backend.compile()
