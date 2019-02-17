@@ -143,27 +143,22 @@ class Compiler(object):
         assert type(dst) == il.Variable
         assert type(src) == il.Variable or type(src) == il.Constant
 
+        # if src is a constant, load it into a temporary
+        if type(src) == il.Constant:
+            src = self.on_constant(src.type, src.value)
+        assert type(src) == il.Variable
+
         if dst.type != src.type:
             # handle pointer arithmetic
             if dst.type == il.Types.ptr:
                 assert dst.ref_level > 0
                 ptr_size = self.target_arch.sizeof(dst.ref_type)
                 if ptr_size > 1:
-                    if type(src) == il.Variable:
-                        src = self.on_binary_op(src, self.on_constant(src.type, ptr_size), il.BinaryOp.Mul)
-                    elif type(src) == il.Constant:
-                        src = self.on_constant(src.type, src.value * ptr_size)
-                    else:
-                        assert False
+                    src = self.on_binary_op(src, self.on_constant(src.type, ptr_size), il.BinaryOp.Mul)
             return il.CastStmt(dst, src)
         else:
-            if type(src) == il.Variable:
-                assert dst.ref_level == src.ref_level
-                assert dst.ref_type == src.ref_type
-            else:
-                assert dst.ref_level == 0
-                assert dst.ref_type is None
-
+            assert dst.ref_level == src.ref_level
+            assert dst.ref_type == src.ref_type
             return il.UnaryStmt(dst, il.UnaryOp.Identity, src)
 
     def on_funcdef_node(self, node):
@@ -403,7 +398,7 @@ class Compiler(object):
 
     def on_constant(self, const_type, value):
         il_var = self.cur_func.new_temporary(const_type, 0, None)
-        assign_stmt = self.on_assign(il_var, il.Constant(value, const_type))
+        assign_stmt = il.ConstantStmt(il_var, il.Constant(value, const_type))
         self.add_stmt(assign_stmt)
         return il_var
 

@@ -123,14 +123,23 @@ class UnaryOp(Enum):
     Negate = '~'
     Minus = '-'
 
+class ConstantStmt(object):
+    def __init__(self, dst, imm):
+        assert type(dst) == Variable
+        if dst.type != imm.type:
+            raise ValueError('Constant load statement operands must be of equal type')
+        self.dst = dst
+        self.imm = imm
+
+    def __repr__(self):
+        return '%s = %s' % (self.dst, self.imm)
+
 class UnaryStmt(object):
     def __init__(self, dst, op, src):
         assert type(dst) == Variable
         assert op.parent == UnaryOp
-        assert type(src) == Variable or type(src) == Constant
+        assert type(src) == Variable
         if dst.type != src.type:
-            print dst.type
-            print src.type
             raise ValueError('Unary statement operands must be of equal type')
         self.dst = dst
         self.op = op
