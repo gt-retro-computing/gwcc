@@ -2,6 +2,8 @@ typedef struct {
     int a;
 } shit;
 
+#define this 234
+
 typedef int uintptr_t;
 
 //uintptr_t value;
@@ -17,7 +19,7 @@ int cock;
     char* test = *argv;
     long meme;
     long* lol = &meme;
-    lol += 1;
+    lol += this;
 
     typedef unsigned int int2;
     int2 x = 3*(5+5),y;
