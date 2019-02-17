@@ -187,8 +187,9 @@ class Frontend(object):
         retvar = il.Variable('_retval', self.get_node_type(func_decl.type.type.type))
         # process parameters
         argvars = []
-        for param_decl in func_decl.type.args.params:
-            argvars.append(self.on_decl_node(param_decl))
+        if func_decl.type.args:
+            for param_decl in func_decl.type.args.params:
+                argvars.append(self.on_decl_node(param_decl))
 
         self.cur_func = il.Function(func_decl.name, argvars, retvar)
         self.cur_block = self.cur_func.cfg.new_block()

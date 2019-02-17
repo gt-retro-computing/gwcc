@@ -53,3 +53,14 @@ int cock;
     }
     return y*(x+z);
 }
+
+int foo() {
+    return 5;
+}
+
+int bar() {
+    return 6;
+}
+
+
+
