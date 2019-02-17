@@ -71,6 +71,16 @@ class Variable(object):
         else:
             return '%s.%s' % (self.type, self.name)
 
+    def __eq__(self, other):
+        return type(other) == Variable \
+            and self.name == other.name \
+            and self.type == other.type \
+            and self.ref_level == other.ref_level \
+            and self.ref_type == other.ref_type
+
+    def __hash__(self):
+        return hash(self.name)
+
 class Constant(object):
     def __init__(self, value, typ):
         assert typ.parent == Types
@@ -256,10 +266,10 @@ class DerefWriteStmt(object): # basically *x operator
             raise ValueError('inconsistent referenced type')
 
         self.ptr = ptr
-        self.dst = src
+        self.src = src
 
     def __repr__(self):
-        return '*%s = %s' % (self.ptr, self.dst)
+        return '*%s = %s' % (self.ptr, self.src)
 
 class CommentStmt(object):
     """
@@ -327,7 +337,7 @@ def defed_var(stmt):
     elif typ == DerefReadStmt:
         return stmt.dst
     elif typ == DerefWriteStmt:
-        return stmt.dst
+        return stmt.src
     elif typ == CommentStmt:
         return None
 

@@ -6,6 +6,7 @@ This compiler brought to you by gangweed ganggang
 from pycparser import c_ast
 import il
 import cfg
+from gwcc.optimization.dataflow import LivenessAnalysis
 from gwcc.optimization.naturalization_pass import NaturalizationPass
 
 class Scope(object):
@@ -190,6 +191,8 @@ class Compiler(object):
         print
         print str(self.cur_func)
         self.cur_func.verify() # integrity check coz i am stupid
+
+        liveness = LivenessAnalysis(self.cur_func).compute_liveness()
 
 
         # exit scope

@@ -1,3 +1,5 @@
+from immutableset import ImmutableSet
+
 class BasicBlock(object):
     def __init__(self, name):
         self.name = name
@@ -62,10 +64,10 @@ class ControlFlowGraph(object):
         del self._reverse_edges[bb]
 
     def get_edges(self, bb):
-        return self._edges[bb]
+        return ImmutableSet(self._edges[bb])
 
     def get_edges_to(self, bb):
-        return self._reverse_edges[bb]
+        return ImmutableSet(self._reverse_edges[bb])
 
     def add_edge(self, e):
         assert type(e) == FlowEdge
