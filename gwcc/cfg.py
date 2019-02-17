@@ -80,8 +80,8 @@ class ControlFlowGraph(object):
             result += bb.pretty_print()
             for outgoing_edge in self.get_edges(bb):
                 result += str(outgoing_edge) + '\n'
-            for incoming_edge in self.get_edges_to(bb):
-                result += str(incoming_edge) + '\n'
+            # for incoming_edge in self.get_edges_to(bb):
+            #     result += str(incoming_edge) + '\n'
         return result
 
 def postorder(cfg):
@@ -99,7 +99,8 @@ def postorder(cfg):
         if v not in coloring: # white
             coloring[v] = 1 # set to gray
             for e in cfg.get_edges(v):
-                stack.append(e.dst)
+                if e.dst not in coloring:
+                    stack.append(e.dst)
         elif coloring[v] == 1: # gray
             coloring[v] = 2 # set to black
             result.append(v)
