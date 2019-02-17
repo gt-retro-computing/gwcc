@@ -3,7 +3,7 @@ A simple 3-address code IL for compiling C code.
 """
 
 from gwcc.util.enum import Enum
-from cfg import ControlFlowGraph, BasicBlock
+from cfg import ControlFlowGraph, BasicBlock, topoorder
 
 class Types(Enum):
     char = 0
@@ -397,7 +397,16 @@ class Function(object):
             elif type(last_stmt) == ReturnStmt:
                 assert len(self.cfg.get_edges(bb)) == 0
 
-        # todo: verify def/use chains are valid
+        # verify def-use chains
+        defined_vars = set()
+        for bb in topoorder(self.cfg):
+            for stmt in bb.stmts:
+                uses = used_vars(stmt)
+                # ignore vars starting with _, they are reserved for retval, locals, globals, etc.
+                assert all(map(lambda v: v.name.startswith('_') or v in defined_vars, uses))
+                defed = defed_var(stmt)
+                if defed:
+                    defined_vars.add(defed)
 
     def pretty_print(self):
         result = 'Function %s(%s) -> %s\n' % (self.name, ', '.join(map(str, self.params)), self.retval)
