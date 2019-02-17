@@ -1,4 +1,5 @@
 typedef struct {
+    int a;
 } shit;
 
 typedef int uintptr_t;
