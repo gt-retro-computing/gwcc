@@ -1,3 +1,3 @@
-from compiler import Compiler
+from c_frontend import Frontend
 
 __version__ = '0.0.1'

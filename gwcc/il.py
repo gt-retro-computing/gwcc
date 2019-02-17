@@ -399,7 +399,10 @@ class Function(object):
 
         # todo: verify def/use chains are valid
 
-    def __str__(self):
+    def pretty_print(self):
         result = 'Function %s(%s) -> %s\n' % (self.name, ', '.join(map(str, self.params)), self.retval)
         result += self.cfg.pretty_print()
         return result
+
+    def __str__(self):
+        return 'function.' + self.name

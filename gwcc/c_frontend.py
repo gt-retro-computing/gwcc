@@ -6,7 +6,6 @@ This compiler brought to you by gangweed ganggang
 from pycparser import c_ast
 import il
 import cfg
-from gwcc.optimization.dataflow import LivenessAnalysis
 from gwcc.optimization.naturalization_pass import NaturalizationPass
 
 class Scope(object):
@@ -44,16 +43,28 @@ class Scope(object):
                 raise RuntimeError("don't know how to resolve type " + str(type_decl))
         return name
 
-class Compiler(object):
+class Frontend(object):
     def __init__(self, arch):
-        self._scope_stack = [Scope('global')]
-        self._scope_cnt = 0
+        # target abi information
         self.target_arch = arch
 
+        # state
+        self._scope_stack = [Scope('global')]
+        self._scope_cnt = 0
         self.cur_func = None
         self.cur_block = None
         self.cur_func_c_locals = None # map from ast data to IRVariable
         self.loop_stack = None # stack of tuples (cond_block, end_block) for continue and break statements
+
+        # output
+        self._functions = []
+        self._compiled = False
+
+    @property
+    def functions(self):
+        if not self._compiled:
+            raise RuntimeError('input has not been compiled yet')
+        return self._functions
 
     @property
     def current_scope(self):
@@ -187,13 +198,10 @@ class Compiler(object):
         self.cur_func.verify() # integrity check coz i am stupid
 
         NaturalizationPass(self.cur_func).process()
-
-        print
-        print str(self.cur_func)
         self.cur_func.verify() # integrity check coz i am stupid
 
-        liveness = LivenessAnalysis(self.cur_func).compute_liveness()
-
+        # store output
+        self._functions.append(self.cur_func)
 
         # exit scope
         self.scope_pop(new_scope)
@@ -242,7 +250,7 @@ class Compiler(object):
     def on_binary_op_node(self, node):
         srcA = self.on_expr_node(node.left)
         srcB = self.on_expr_node(node.right)
-        il_op = Compiler.parse_binary_op(node.op)
+        il_op = Frontend.parse_binary_op(node.op)
         return self.on_binary_op(srcA, srcB, il_op)
 
     @staticmethod
@@ -313,7 +321,7 @@ class Compiler(object):
         # now evaluate rhs
         rhs_value = self.on_expr_node(node.rvalue)
         if node.op != '=': # examples are like +=, ^=, >>=, etc.
-            op = Compiler.parse_binary_op(node.op[:-1])
+            op = Frontend.parse_binary_op(node.op[:-1])
             lhs_value = self.on_dereference(lhs) if is_ptr else lhs
             rhs_value = self.on_binary_op(lhs_value, rhs_value, op)
 
@@ -444,7 +452,7 @@ class Compiler(object):
         elif node.op == '&':
             return self.on_reference(expr_var)
         else:
-            il_op = Compiler.parse_unary_op(node.op)
+            il_op = Frontend.parse_unary_op(node.op)
             dst_var = self.duplicate_var(expr_var)
             new_stmt = il.UnaryStmt(dst_var, il_op, expr_var)
             self.add_stmt(new_stmt)
@@ -491,6 +499,7 @@ class Compiler(object):
 
     def compile(self, ast):
         self.compile_stmts(ast.ext)
+        self._compiled = True
 
     @staticmethod
     def interpret_identifier_type(names):
@@ -566,8 +575,8 @@ class Compiler(object):
         if type(node) == c_ast.TypeDecl:
             return self.get_node_type(node.type)
         if type(node) == c_ast.IdentifierType:
-            signedness, decl_size, decl_type = Compiler.interpret_identifier_type(node.names)
-            builtin_type = Compiler.parse_decl_type(signedness, decl_size, decl_type)
+            signedness, decl_size, decl_type = Frontend.interpret_identifier_type(node.names)
+            builtin_type = Frontend.parse_decl_type(signedness, decl_size, decl_type)
             if builtin_type:
                 return builtin_type
             else:
