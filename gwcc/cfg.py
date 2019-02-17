@@ -1,4 +1,4 @@
-from immutableset import ImmutableSet
+from gwcc.util.immutableset import ImmutableSet
 
 class BasicBlock(object):
     def __init__(self, name):

@@ -2,7 +2,7 @@
 A simple 3-address code IL for compiling C code.
 """
 
-from enum import Enum
+from gwcc.util.enum import Enum
 from cfg import ControlFlowGraph, BasicBlock
 
 class Types(Enum):
