@@ -2,7 +2,6 @@ from ..optimization.dataflow import LivenessAnalysis
 from .. import il
 from .. import cfg
 from ..abi.lc3 import LC3 as ABI
-from ..util.enum import Enum
 
 class Relocation(object):
     def __init__(self, asm_idx, asm_len, gen_func, *gen_args):
@@ -25,16 +24,18 @@ class Relocation(object):
 class LC3(object):
     """
     --- The LC3 GANGWEED C BINARY ABI ---
-    Basically, imagine you're on a __fastcall compiler in 16 bits.
+    Basically, imagine you're on a __stdcall compiler in 16 bits.
 
     For word-size arguments:
         Return value in r0.
-        Registers passed in r0, r1, r2, r3 then pushed on the stack.
+        Registers pushed on the stack right-to-left.
     For larger-than-word-size aruguments:
         Passed as pointer to the stack using protocol described above.
 
-    r4, r5, r6, and r7 are all callee-saved registers. r0, r1, r2, r3 are not saved.
     r5 is the frame pointer and r6 is the stack pointer. Stack cleanup is callee.
+    r1, r2, r3, r4, r5, and r6 are all callee-saved registers.
+    r0 is not saved because it holds the return value.
+    r7 is not saved because it holds the return address.
 
     Stack starts at 0xFFFF and grows toward lower addresses.
     """
@@ -159,7 +160,7 @@ class LC3(object):
         """
         self.emit_insn('AND %s, %s, #0' % (reg, reg))
 
-    def cl_negate(self, reg):
+    def cl_twos(self, reg):
         self.emit_insn('NOT %s, %s' % (reg, reg))
         self.emit_insn('ADD %s, %s, #1' % (reg, reg))
 
@@ -180,9 +181,9 @@ class LC3(object):
 
     def cl_sub(self, dst_reg, src_reg):
         self.emit_comment('sub ' + dst_reg + ', ' + src_reg)
-        self.cl_negate(src_reg)
+        self.cl_twos(src_reg)
         self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, src_reg))
-        self.cl_negate(src_reg)
+        self.cl_twos(src_reg)
 
 
 
@@ -237,8 +238,8 @@ class LC3(object):
         """
         Emits a compiler-generated stub to setup the stack and shit
         """
-        self.cl_load_reg(LC3.bp, 0xffff)
-        self.cl_load_reg(LC3.sp, 0xffff)
+        self.cl_load_reg(LC3.bp, 0xbfff)
+        self.cl_load_reg(LC3.sp, 0xbfff)
         self.reloc_jump_to(self.mangle_name('main'))
 
     def emit_global_variable(self, glob):
@@ -273,11 +274,26 @@ class LC3(object):
             locals_size += ABI.sizeof(local.type)
         self.emit_func_prologue(locals_size)
 
+        # let's cop liveness
+        liveness = LivenessAnalysis(func).compute_liveness()
+
+        # all registers is available to us except bp and sp.
+        register_desc = {} # maps from registers to what temps it stores.
+        for reg in ['r0', 'r1', 'r2', 'r3', 'r4', 'r7']:
+            register_desc[reg] = []
+        address_desc = {} # maps from temps to where it is stored (reg or mem).
+
         # linearize the cfg
         blocks = cfg.topoorder(func.cfg)
 
-        # let's cop liveness
-        liveness = LivenessAnalysis(func).compute_liveness()
+        for bb in blocks:
+            # statement-level live-out sets
+            stmt_liveness = [set() for _ in range(len(bb.stmts))]
+            stmt_liveness[-1].update(liveness.live_out(bb))
+            for i in range(len(bb.stmts) - 1, -1, -1):
+                stmt = bb.stmts[i]
+                stmt_liveness[i].discard(il.defed_var(stmt))
+                stmt_liveness[i].update(il.used_vars(stmt))
 
         self.emit_func_epilogue()
 
@@ -285,7 +301,14 @@ class LC3(object):
     def emit_func_prologue(self, locals_size):
         self.cl_push(self.rp)
         self.cl_push(self.bp)
+        self.cl_push('r1')
+        self.cl_push('r2')
+        self.cl_push('r3')
+        self.cl_push('r4')
         self.cl_move(self.bp, self.sp)
+        self.emit_comment('sub sp, %d' % (locals_size,))
+        if locals_size > 63: # lol
+            raise RuntimeError('too many locals X(')
         if locals_size > 31:
             self.vl_load_reg(self.rp, locals_size)
             self.cl_sub(self.sp, self.rp)
@@ -293,11 +316,15 @@ class LC3(object):
             self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, locals_size))
 
     def emit_func_epilogue(self):
+        self.emit_comment('leave')
         self.cl_move(self.sp, self.bp)
+        self.cl_pop('r4')
+        self.cl_pop('r3')
+        self.cl_pop('r2')
+        self.cl_pop('r1')
         self.cl_pop(self.bp)
         self.cl_pop(self.rp)
         self.emit_insn('RET')
-        pass
 
     def emit_global_name(self, global_name):
         if global_name.location > 0:
