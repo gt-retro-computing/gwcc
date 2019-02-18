@@ -102,6 +102,9 @@ class CompiledValue(object):
         elif typ == CompiledValueType.Pointer:
             assert type(value) == str
 
+    def __repr__(self):
+        return str(self.value)
+
 class Constant(object):
     def __init__(self, value, typ):
         assert type(value) == CompiledValue
