@@ -3,6 +3,7 @@ The Gangweed Retargetable C compiler
 This compiler brought to you by gangweed ganggang
 """
 
+import sys
 from pycparser import c_ast
 import il
 import cfg
@@ -52,23 +53,18 @@ class Frontend(object):
         self._scope_stack = [Scope('global')]
         self._scope_cnt = 0
         self._c_variables = {}
+
+        self.cur_pragma_loc = 0
+
         self.cur_func = None
         self.cur_block = None
         self.loop_stack = None # stack of tuples (cond_block, end_block) for continue and break statements
 
         # output
-        self._functions = []
         self._globals = []
         self._compiled = False
 
-    @property
-    def functions(self):
-        if not self._compiled:
-            raise RuntimeError('input has not been compiled yet')
-        return self._functions
-
-    @property
-    def globals(self):
+    def get_globals(self):
         if not self._compiled:
             raise RuntimeError('input has not been compiled yet')
         return self._globals
@@ -151,9 +147,13 @@ class Frontend(object):
                 if self.cur_func:
                     self.cur_func.locals.append(il_var)
             else:
+                init = None
                 if node.init:
-                    raise RuntimeError('global variable initialisers are not supported')
-                self._globals[node.name] = il_var
+                    if type(node.init) == c_ast.Constant:
+                        init = self.on_constant_node(node)
+                    else:
+                        raise RuntimeError('global variable initialisers must be constant')
+                self._globals[node.name] = il.GlobalName(node.name, il_var, init, self.cur_pragma_loc)
             self._c_variables[node] = il_var
             return il_var
 
@@ -214,7 +214,7 @@ class Frontend(object):
         self.cur_func.verify() # integrity check coz i am stupid
 
         # store output
-        self._functions.append(self.cur_func)
+        self._globals.append(il.GlobalName(func_decl.name, self.cur_func, None, self.cur_pragma_loc))
 
         # exit scope
         self.scope_pop(new_scope)
@@ -368,10 +368,28 @@ class Frontend(object):
         self.loop_stack.pop()
         self.cur_block = end_block
 
+    def on_pragma_node(self, node):
+        pragma = node.string
+        print 'pragma: ' + pragma
+        parts = pragma.split(' ')
+        if parts[0] == 'location':
+            if parts[1] == 'pop':
+                self.cur_pragma_loc = 0
+            else:
+                try:
+                    loc = int(parts[1], 0)
+                except ValueError:
+                    raise SyntaxError('invalid pragma location: ' + parts[1])
+                self.cur_pragma_loc = loc
+        else:
+            sys.stderr.write('warning: ignored pragma ' + pragma + '\n')
+
     # nodes that do not evaluate
     def on_stmt_node(self, node):
         typ = type(node)
-        if typ == c_ast.Typedef:
+        if typ == c_ast.Pragma:
+            self.on_pragma_node(node)
+        elif typ == c_ast.Typedef:
             self.on_typedef_node(node)
         elif typ == c_ast.Decl:
             self.on_decl_node(node)

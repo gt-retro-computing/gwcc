@@ -1,6 +1,8 @@
 typedef struct {
 } shit;
 
+#pragma location 0x3000
+
 typedef int uintptr_t;
 
 //uintptr_t value;
@@ -10,6 +12,7 @@ typedef int uintptr_t;
 int value3;
 
 //int value4 = (short)6;
+
 
 int main(int argc, char** argv) {
 int cock;

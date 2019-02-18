@@ -416,3 +416,16 @@ class Function(object):
 
     def __str__(self):
         return 'function.' + self.name
+
+class GlobalName(object):
+    """
+    Represents a value to be allocated somewhere in the binary, such as a
+    function, or a global variable.
+    """
+    def __init__(self, name, value, init=None, location=0):
+        self.name = name
+        self.value = value
+        self.init = init
+        self.location = location
+        if type(value) not in [Variable, Function]:
+            raise ValueError('GlobalName should describe functions or global variables')

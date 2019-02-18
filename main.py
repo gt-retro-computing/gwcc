@@ -14,8 +14,6 @@ if __name__ == '__main__':
     frontend = gwcc.Frontend(gwcc.abi.LC3)
     frontend.compile(ast)
 
-    for func in frontend.functions:
-        print func.pretty_print()
-
-    backend = gwcc.backend.LC3(frontend.globals, frontend.functions)
+    backend = gwcc.backend.LC3(frontend.get_globals())
     backend.compile()
+    print '\n'.join(backend.get_output())
