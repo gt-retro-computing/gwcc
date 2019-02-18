@@ -51,9 +51,9 @@ class Frontend(object):
         # state
         self._scope_stack = [Scope('global')]
         self._scope_cnt = 0
+        self._c_variables = {}
         self.cur_func = None
         self.cur_block = None
-        self.cur_func_c_locals = None # map from ast data to IRVariable
         self.loop_stack = None # stack of tuples (cond_block, end_block) for continue and break statements
 
         # output
@@ -76,6 +76,10 @@ class Frontend(object):
     @property
     def current_scope(self):
         return self._scope_stack[-1]
+
+    @property
+    def scope_depth(self):
+        return len(self._scope_stack)
 
     def scope_push(self):
         scope_name = 'local_%s' % (self._scope_cnt,)
@@ -129,26 +133,29 @@ class Frontend(object):
         else:
             self.current_scope.symbols[decl_name] = node
 
-            if self.cur_func_c_locals is not None: # we are in a function -> this is a local decl.
-                var_type = self.get_node_type(node.type)
-                if var_type == il.Types.ptr:
-                    ref_level, ref_type = self.extract_pointer_type(node.type)
-                    # print 'pointer declared: %s %d %s' % (node.name, ref_level, ref_type)
-                else:
-                    # print 'local declared: %s' % (node.name,)
-                    ref_level, ref_type = 0, None
+            var_type = self.get_node_type(node.type)
+            if var_type == il.Types.ptr:
+                ref_level, ref_type = self.extract_pointer_type(node.type)
+                # print 'pointer declared: %s %d %s' % (node.name, ref_level, ref_type)
+            else:
+                # print 'local declared: %s' % (node.name,)
+                ref_level, ref_type = 0, None
 
-                tmpvar_name = '_' + str(self.current_scope.name) + '_' + node.name
-                il_var = il.Variable(tmpvar_name, var_type, ref_level, ref_type)
-                self.cur_func_c_locals[node] = il_var
+            var_name = '_' + str(self.current_scope.name) + '_' + node.name
+            il_var = il.Variable(var_name, var_type, ref_level, ref_type)
 
+            if self.scope_depth > 0: # we are in a function -> this is a local decl.
                 if node.init:
                     init_expr_var = self.on_expr_node(node.init)
                     self.add_stmt(self.on_assign(il_var, init_expr_var))
-
-                return il_var
+                if self.cur_func:
+                    self.cur_func.locals.append(il_var)
             else:
-                raise RuntimeError('globals not supported yet')
+                if node.init:
+                    raise RuntimeError('global variable initialisers are not supported')
+                self._globals[node.name] = il_var
+            self._c_variables[node] = il_var
+            return il_var
 
 
     def duplicate_var(self, var):
@@ -187,7 +194,6 @@ class Frontend(object):
 
         # new scope
         new_scope = self.scope_push()
-        self.cur_func_c_locals = {}
         self.loop_stack = []
 
         # return val
@@ -214,7 +220,6 @@ class Frontend(object):
         self.scope_pop(new_scope)
         self.cur_func = None
         self.cur_block = None
-        self.cur_func_c_locals = None
         self.loop_stack = None
 
     def on_if_node(self, node):
@@ -443,6 +448,11 @@ class Frontend(object):
     def on_predecrement_node(self, expr_node):
         return self.on_assign_node(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', 1)))
 
+    def on_sizeof_node(self, sizeof_node):
+        typ = self.get_node_type(sizeof_node.type)
+        type_size = self.target_arch.sizeof(typ)
+        return self.on_constant(il.Types.int, type_size)
+
     def on_unary_op_node(self, node):
         if node.op == 'p++':
             return self.on_postincrement_node(node.expr)
@@ -452,6 +462,8 @@ class Frontend(object):
             return self.on_postdecrement_node(node.expr)
         elif node.op == '--':
             return self.on_predecrement_node(node.expr)
+        elif node.op == 'sizeof':
+            return self.on_sizeof_node(node.expr)
 
         expr_var = self.on_expr_node(node.expr)
         if node.op == '*':
@@ -477,12 +489,8 @@ class Frontend(object):
         scope, ast_decl = self.current_scope.resolve_symbol(node.name)
         if not scope:
             raise SyntaxError('use of undeclared symbol ' + node.name)
-        if scope.height == 0:
-            # global
-            raise RuntimeError('globals not supported yet')
-        else:
-            il_var = self.cur_func_c_locals[ast_decl]
-            return il_var
+        il_var = self._c_variables[ast_decl]
+        return il_var
 
     # nodes that evaluate. return an ILVariable holding the evaluated value
     def on_expr_node(self, node):

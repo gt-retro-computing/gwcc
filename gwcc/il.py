@@ -348,16 +348,17 @@ class Function(object):
         :param params: an array of ILVariables representing the function's parameters
         :param retval: an ILVariable that represents the function's return value
         """
+        assert type(retval) == Variable
 
         self.name = name
         self.params = params
         self.retval = retval
         self.temporaries = {}
-
-        self.locals_size = 0
         self.locals = []
 
         self.cfg = ControlFlowGraph()
+
+        self.locals.extend(params)
 
     @property
     def num_args(self):

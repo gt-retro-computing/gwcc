@@ -7,7 +7,7 @@ typedef int uintptr_t;
 
 //unsigned shit lol;
 
-//int value3 = sizeof(int);
+int value3;
 
 //int value4 = (short)6;
 
@@ -17,6 +17,7 @@ int cock;
     long meme;
     long* lol = &meme;
     lol += 1;
+    int wowza = value3+6969+sizeof(int);
 
     typedef unsigned int int2;
     int2 x = 3*(5+5),y;
