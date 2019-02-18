@@ -5,11 +5,13 @@ class ABI(object):
     SHORT_BITS = 0
     INT_BITS = 0
     LONG_BITS = 0
+    PTR_BITS = 0
 
     CHAR_SIZE = 0
     SHORT_SIZE = 0
     INT_SIZE = 0
     LONG_SIZE = 0
+    PTR_SIZE = 0
 
     @classmethod
     def bitsize(cls, il_type):
@@ -21,6 +23,8 @@ class ABI(object):
             return cls.INT_BITS
         elif il_type == il.Types.long or il_type == il.Types.ulong:
             return cls.LONG_BITS
+        elif il_type == il.Types.ptr:
+            return cls.PTR_BITS
 
     @classmethod
     def sizeof(cls, il_type):
@@ -32,3 +36,5 @@ class ABI(object):
             return cls.INT_SIZE
         elif il_type == il.Types.long or il_type == il.Types.ulong:
             return cls.LONG_SIZE
+        elif il_type == il.Types.ptr:
+            return cls.PTR_SIZE

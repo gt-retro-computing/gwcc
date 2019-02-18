@@ -1,5 +1,7 @@
 from ..optimization.dataflow import LivenessAnalysis
 from .. import il
+from .. import cfg
+from ..abi.lc3 import LC3 as ABI
 from ..util.enum import Enum
 
 class Relocation(object):
@@ -10,7 +12,8 @@ class Relocation(object):
         self.gen_args = gen_args
 
     def __str__(self):
-        return 'relocation<idx=%d len=%d func=%d, args=%s>' % (self.asm_idx, self.asm_idx, self.gen_func, self.gen_args)
+        return 'relocation<idx=%d len=%d func=%d, args=%s>' % (
+            self.asm_idx, self.asm_idx, self.gen_func, self.gen_args)
 
     class Resolved(object):
         def __init__(self, name):
@@ -36,9 +39,9 @@ class LC3(object):
     Stack starts at 0xFFFF and grows toward lower addresses.
     """
 
-    bp = 'r5'
-    sp = 'r6'
-    rp = 'r7'
+    bp = 'r5' # basepointer basepointer basepointer basepointer
+    sp = 'r6' # stack pointer
+    rp = 'r7' # return pointer
 
     def __init__(self, names):
         assert all(map(lambda e: type(e) == il.GlobalName, names))
@@ -63,8 +66,39 @@ class LC3(object):
     def mangle_name(self, name):
         return '_' + name
 
+
+
+
+    def place_relocation(self, name):
+        self.emit_newline()
+        self.emit_comment('symbol: %s' % (name,))
+        self._mappings[self.mangle_name(name)] = self._cur_binary_loc
+
+    def is_name_mapped(self, name):
+        return name in self._mappings
+
+    def get_binary_location(self, name):
+        return self._mappings[name]
+
+
+
+
+
+
+    def make_reloc(self, gen_func, *args):
+        asm_idx_start = len(self._asm)
+        unwrapped_args = list(args)
+        for i in range(len(unwrapped_args)):
+            if type(unwrapped_args[i]) == Relocation.Resolved:
+                unwrapped_args[i] = 0
+        gen_func(*unwrapped_args)
+        asm_idx_end = len(self._asm)
+        reloc = Relocation(asm_idx_start, asm_idx_end - asm_idx_start, gen_func, *args)
+        self._deferred_relocations.append(reloc)
+
     def _apply_reloc(self, reloc):
         asm_bak = self._asm
+        cur_binary_loc_bak = self._cur_binary_loc
         self._asm = []
 
         gen_args = list(reloc.gen_args)
@@ -77,19 +111,23 @@ class LC3(object):
 
         asm_bak[reloc.asm_idx:reloc.asm_idx + reloc.asm_len] = self._asm
         self._asm = asm_bak
+        self._cur_binary_loc = cur_binary_loc_bak
 
     def apply_relocations(self):
         for reloc in self._deferred_relocations:
             self._apply_reloc(reloc)
 
-    def place_relocation(self, name):
-        self.emit_comment('symbol: %s' % (name,))
-        self._mappings[self.mangle_name(name)] = self._cur_binary_loc
+
+
+
 
     def _emit_line(self, line, binary_len):
-        self.emit_comment('loc=%02x' % (self._cur_binary_loc,))
+        line += '\t; loc=%02x' % (self._cur_binary_loc,)
         self._asm.append(line)
         self._cur_binary_loc += binary_len
+
+    def emit_newline(self):
+        self._asm.append('')
 
     def emit_comment(self, line):
         self._asm.append('; ' + line)
@@ -103,11 +141,105 @@ class LC3(object):
     def emit_section_end(self):
         self._emit_line('.end', 0)
 
-    def emit_fill(self, name, value):
-        self._emit_line('%s .fill %d' % (name, value), 1)
+    def emit_fill(self, value, name=''):
+        if name:
+            self._emit_line('%s .fill x%x' % (name, value), 1)
+        else:
+            self._emit_line('.fill x%x' % (value,), 1)
 
     def emit_blkw(self, name, size):
         self._emit_line('%s .blkw %d' % (name, size), size)
+
+
+
+
+    def cl_zero_reg(self, reg):
+        """
+        Zero a register using a constant length of code.
+        """
+        self.emit_insn('AND %s, %s, #0' % (reg, reg))
+
+    def cl_negate(self, reg):
+        self.emit_insn('NOT %s, %s' % (reg, reg))
+        self.emit_insn('ADD %s, %s, #1' % (reg, reg))
+
+    def cl_push(self, src_reg):
+        self.emit_comment('push ' + src_reg)
+        self.emit_insn('ADD %s, %s, #-1' % (self.sp, self.sp))
+        self.emit_insn('STR %s, %s, #0' % (src_reg, self.sp))
+
+    def cl_pop(self, dst_reg):
+        self.emit_comment('pop ' + dst_reg)
+        self.emit_insn('LDR %s, %s, #0' % (dst_reg, self.sp))
+        self.emit_insn('ADD %s, %s, #1' % (self.sp, self.sp))
+
+    def cl_move(self, dst_reg, src_reg):
+        self.emit_comment('mov ' + dst_reg + ', ' + src_reg)
+        self.cl_zero_reg(dst_reg)
+        self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, src_reg))
+
+    def cl_sub(self, dst_reg, src_reg):
+        self.emit_comment('sub ' + dst_reg + ', ' + src_reg)
+        self.cl_negate(src_reg)
+        self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, src_reg))
+        self.cl_negate(src_reg)
+
+
+
+
+
+    def cl_load_reg(self, reg, value):
+        """
+        Set a register to a 16-bit value using a constant length of code.
+        """
+        self.emit_comment('load: %s <- %d (0x%02x)' % (reg, value, value))
+        self.cl_zero_reg(reg)
+        value %= 0x10000
+        for bit in range(0, 16):
+            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
+            self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
+            value >>= 1
+        assert value == 0
+
+    def vl_load_reg(self, reg, value):
+        """
+        Set a register to a 16-bit value using a variable length of code.
+        """
+        self.emit_comment('load: %s <- %d (0x%02x)' % (reg, value, value))
+        self.cl_zero_reg(reg)
+        value %= 0x10000
+        while value:
+            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
+            self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
+            value >>= 1
+
+    def reloc_load_address(self, reg, name):
+        if self.is_name_mapped(name):
+            self.vl_load_reg(reg, self.get_binary_location(name))
+        else:
+            self.emit_comment('relocated load: %s <- %s' % (reg, name))
+            self.make_reloc(self.cl_load_reg, reg, Relocation.Resolved(name))
+
+    def reloc_jump_to(self, label):
+        self.emit_insn('LD %s, #1' % (self.rp,))
+        self.emit_insn('jmp %s' % (self.rp,))
+        if self.is_name_mapped(label):
+            self.emit_fill(self.get_binary_location(label))
+        else:
+            self.emit_comment('relocated address: ' + label)
+            self.make_reloc(self.emit_fill, Relocation.Resolved(label))
+
+
+
+
+
+    def emit_stub(self):
+        """
+        Emits a compiler-generated stub to setup the stack and shit
+        """
+        self.cl_load_reg(LC3.bp, 0xffff)
+        self.cl_load_reg(LC3.sp, 0xffff)
+        self.reloc_jump_to(self.mangle_name('main'))
 
     def emit_global_variable(self, glob):
         self.place_relocation(glob.name)
@@ -120,7 +252,7 @@ class LC3(object):
                         il.Types.int, il.Types.uint]:
             if init:
                 assert init.type == il.CompiledValueType.Integer
-                self.emit_fill(asm_name, init.value)
+                self.emit_fill(init.value, asm_name)
             else:
                 self.emit_blkw(asm_name, 1)
         else:
@@ -134,66 +266,67 @@ class LC3(object):
         # print func.pretty_print()
         # with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
         #     func.dump_graph(fd=f)
+
+        # function prologue
+        locals_size = 0
+        for local in func.locals:
+            locals_size += ABI.sizeof(local.type)
+        self.emit_func_prologue(locals_size)
+
+        # linearize the cfg
+        blocks = cfg.topoorder(func.cfg)
+
+        # let's cop liveness
         liveness = LivenessAnalysis(func).compute_liveness()
 
-    def cl_zero_reg(self, reg):
-        """
-        Zero a register using a constant length of code.
-        """
-        self.emit_insn('AND %s, %s, #0' % (reg, reg))
+        self.emit_func_epilogue()
 
-    def cl_load_reg(self, reg, value):
-        """
-        Set a register to a 16-bit value using a constant length of code.
-        """
-        self.emit_comment('load: %s <- %d (0x02%x)' % (reg, value, value))
-        self.cl_zero_reg(reg)
-        value %= 0x10000
-        for bit in range(0, 16):
-            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
-            self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
-            value >>= 1
-        assert value == 0
 
-    def reloc_load_address(self, reg, name):
-        self.emit_comment('relocated load: %s <- %s' % (reg, name))
-        asm_idx_start = len(self._asm)
-        self.cl_load_reg(reg, 0)
-        asm_idx_end = len(self._asm)
-        reloc = Relocation(asm_idx_start, asm_idx_end - asm_idx_start,
-                           self.cl_load_reg, reg, Relocation.Resolved(name))
-        self._deferred_relocations.append(reloc)
+    def emit_func_prologue(self, locals_size):
+        self.cl_push(self.rp)
+        self.cl_push(self.bp)
+        self.cl_move(self.bp, self.sp)
+        if locals_size > 31:
+            self.vl_load_reg(self.rp, locals_size)
+            self.cl_sub(self.sp, self.rp)
+        else:
+            self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, locals_size))
 
-    def jump_to(self, label):
-        self.reloc_load_address('r0', label)
-        self.emit_insn('jmp #r0')
+    def emit_func_epilogue(self):
+        self.cl_move(self.sp, self.bp)
+        self.cl_pop(self.bp)
+        self.cl_pop(self.rp)
+        self.emit_insn('RET')
+        pass
 
-    def emit_stub(self):
-        """
-        Emits a compiler-generated stub to setup the stack and shit
-        """
-        self.cl_load_reg(LC3.bp, 0xffff)
-        self.cl_load_reg(LC3.sp, 0xffff)
-        self.jump_to(self.mangle_name('main'))
+    def emit_global_name(self, global_name):
+        if global_name.location > 0:
+            if global_name.location < 0x3000 or global_name.location > 0xFFFF:
+                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xFFFF' % (global_name.location,))
+            self.emit_section_end()
+            self.emit_orig(global_name.location)
+            self._cur_binary_loc = global_name.location
+
+        if type(global_name.value) == il.Variable:
+            self.emit_global_variable(global_name)
+        elif type(global_name.value) == il.Function:
+            self.emit_function(global_name)
+        else:
+            raise RuntimeError('invalid GlobalName: ' + str(global_name.value))
 
     def compile(self):
         self._cur_binary_loc = 0x3000
         self.emit_orig(self._cur_binary_loc)
         self.emit_stub()
 
-        for global_name in self._names:
-            if global_name.location > 0:
-                if global_name.location < 0x3000 or global_name.location > 0xFFFF:
-                    raise SyntaxError('pragma location 0x%x not in range 0x3000-0xFFFF' % (global_name.location,))
-                if global_name.location != self._cur_binary_loc:
-                    self.emit_section_end()
-                    self.emit_orig(global_name.location)
-                    self._cur_binary_loc = global_name.location
+        # emit globals then funcs
+        global_vars = filter(lambda name: type(name.value) == il.Variable, self._names)
+        for var in global_vars:
+            self.emit_global_name(var)
 
-            if type(global_name.value) == il.Variable:
-                self.emit_global_variable(global_name)
-            elif type(global_name.value) == il.Function:
-                self.emit_function(global_name)
+        functions = filter(lambda name: type(name.value) == il.Function, self._names)
+        for func in functions:
+            self.emit_global_name(func)
 
         self.emit_section_end()
 
