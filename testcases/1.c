@@ -4,7 +4,7 @@ typedef struct {
 
 #define asdf 234
 
-#pragma location 0x3000
+//#pragma location 0x4000
 
 typedef int uintptr_t;
 

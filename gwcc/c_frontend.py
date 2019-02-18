@@ -369,7 +369,6 @@ class Frontend(object):
 
     def on_pragma_node(self, node):
         pragma = node.string
-        print 'pragma: ' + pragma
         parts = pragma.split(' ')
         if parts[0] == 'location':
             if parts[1] == 'pop':
