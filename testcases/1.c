@@ -5,9 +5,9 @@ typedef struct {
 
 typedef int uintptr_t;
 
-//uintptr_t value;
+uintptr_t value;
 
-//unsigned shit lol;
+unsigned lol;
 
 int value3 = 69;
 
