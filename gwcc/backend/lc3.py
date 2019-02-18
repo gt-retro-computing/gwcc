@@ -38,6 +38,8 @@ class LC3(object):
     def emit_function(self, glob):
         func = glob.value
         # print func.pretty_print()
+        with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
+            func.dump_graph(fd=f)
         liveness = LivenessAnalysis(func).compute_liveness()
 
     def sorted_names(self):

@@ -1,5 +1,8 @@
 typedef struct {
+    int a;
 } shit;
+
+#define asdf 234
 
 #pragma location 0x3000
 
@@ -13,13 +16,12 @@ int value3 = 69;
 
 //int value4 = (short)6;
 
-
 int main(int argc, char** argv) {
 int cock;
     char* test = *argv;
     long meme;
     long* lol = &meme;
-    lol += 1;
+    lol += asdf;
     int wowza = value3+6969+sizeof(int);
 
     typedef unsigned int int2;
@@ -54,3 +56,14 @@ int cock;
     }
     return y*(x+z);
 }
+
+int foo() {
+    return 5;
+}
+
+int bar() {
+    return 6;
+}
+
+
+
