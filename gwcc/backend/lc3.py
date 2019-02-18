@@ -195,11 +195,11 @@ class LC3(object):
         self.emit_comment('load: %s <- %d (0x%02x)' % (reg, value, value))
         self.cl_zero_reg(reg)
         value %= 0x10000
-        for bit in range(0, 16):
-            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
+        for bit in range(15, -1, -1):
+            print bit
             self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
-            value >>= 1
-        assert value == 0
+            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, (value >> bit) & 1))
+
 
     def vl_load_reg(self, reg, value):
         """
@@ -237,7 +237,7 @@ class LC3(object):
         """
         Emits a compiler-generated stub to setup the stack and shit
         """
-        self.cl_load_reg(LC3.bp, 0xffff)
+        self.cl_load_reg(LC3.bp, 0x2)
         self.cl_load_reg(LC3.sp, 0xffff)
         self.reloc_jump_to(self.mangle_name('main'))
 
