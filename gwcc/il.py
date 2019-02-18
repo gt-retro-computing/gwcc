@@ -3,7 +3,7 @@ A simple 3-address code IL for compiling C code.
 """
 
 from gwcc.util.enum import Enum
-from cfg import ControlFlowGraph, BasicBlock, topoorder
+from cfg import ControlFlowGraph, BasicBlock, topoorder, dump_graph
 
 class Types(Enum):
     char = 0
@@ -412,6 +412,9 @@ class Function(object):
         result = 'Function %s(%s) -> %s\n' % (self.name, ', '.join(map(str, self.params)), self.retval)
         result += self.cfg.pretty_print()
         return result
+
+    def dump_graph(self, f=None):
+        dump_graph(self.cfg, name=self.name, f=f)
 
     def __str__(self):
         return 'function.' + self.name

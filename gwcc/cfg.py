@@ -1,3 +1,4 @@
+import sys
 from gwcc.util.immutableset import ImmutableSet
 
 class BasicBlock(object):
@@ -115,3 +116,22 @@ def postorder(cfg):
 
 def topoorder(cfg):
     return list(reversed(list(postorder(cfg))))
+
+
+def _sanitize(s):
+    return s.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+
+
+def dump_graph(cfg, f=None, name='CFG'):
+    f = f or sys.stdout
+    print >>f, "digraph \"%s\" {" % _sanitize(name)
+
+    for bb in topoorder(cfg):
+        label = _sanitize('\n'.join(["== Block %s ==" % bb.name] + list(map(str, bb.stmts))))
+        print >>f, "    %s [shape=box, label=\"%s\"]" % (bb.name, label)
+
+    for bb in topoorder(cfg):
+        for edge in cfg.get_edges(bb):
+            print >>f, "%s -> %s;" % (edge.src, edge.dst)
+
+    print >>f, "}\n"

@@ -32,4 +32,8 @@ if __name__ == '__main__':
 
     for func in frontend.functions:
         print func.pretty_print()
+
+        with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
+            func.dump_graph(f=f)
+
         liveness = LivenessAnalysis(func).compute_liveness()
