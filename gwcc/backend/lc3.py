@@ -37,7 +37,7 @@ class LC3(object):
     r0 is not saved because it holds the return value.
     r7 is not saved because it holds the return address.
 
-    Stack starts at 0xFFFF and grows toward lower addresses.
+    Stack starts at 0xEFFF and grows toward lower addresses.
     """
 
     bp = 'r5' # basepointer basepointer basepointer basepointer
@@ -196,11 +196,10 @@ class LC3(object):
         self.emit_comment('load: %s <- %d (0x%02x)' % (reg, value, value))
         self.cl_zero_reg(reg)
         value %= 0x10000
-        for bit in range(0, 16):
-            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
+        for bit in range(15, -1, -1):
             self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
-            value >>= 1
-        assert value == 0
+            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, (value >> bit) & 1))
+
 
     def vl_load_reg(self, reg, value):
         """
@@ -328,8 +327,8 @@ class LC3(object):
 
     def emit_global_name(self, global_name):
         if global_name.location > 0:
-            if global_name.location < 0x3000 or global_name.location > 0xFFFF:
-                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xFFFF' % (global_name.location,))
+            if global_name.location < 0x3000 or global_name.location > 0xBFFF:
+                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xBFFF' % (global_name.location,))
             self.emit_section_end()
             self.emit_orig(global_name.location)
             self._cur_binary_loc = global_name.location
