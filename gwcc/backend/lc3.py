@@ -36,7 +36,7 @@ class LC3(object):
     r4, r5, r6, and r7 are all callee-saved registers. r0, r1, r2, r3 are not saved.
     r5 is the frame pointer and r6 is the stack pointer. Stack cleanup is callee.
 
-    Stack starts at 0xFFFF and grows toward lower addresses.
+    Stack starts at 0xEFFF and grows toward lower addresses.
     """
 
     bp = 'r5' # basepointer basepointer basepointer basepointer
@@ -237,8 +237,8 @@ class LC3(object):
         """
         Emits a compiler-generated stub to setup the stack and shit
         """
-        self.cl_load_reg(LC3.bp, 0xFFFF)
-        self.cl_load_reg(LC3.sp, 0xffff)
+        self.cl_load_reg(LC3.bp, 0xBFFF)
+        self.cl_load_reg(LC3.sp, 0xBFFF)
         self.reloc_jump_to(self.mangle_name('main'))
 
     def emit_global_variable(self, glob):
@@ -301,8 +301,8 @@ class LC3(object):
 
     def emit_global_name(self, global_name):
         if global_name.location > 0:
-            if global_name.location < 0x3000 or global_name.location > 0xFFFF:
-                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xFFFF' % (global_name.location,))
+            if global_name.location < 0x3000 or global_name.location > 0xBFFF:
+                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xBFFF' % (global_name.location,))
             self.emit_section_end()
             self.emit_orig(global_name.location)
             self._cur_binary_loc = global_name.location
