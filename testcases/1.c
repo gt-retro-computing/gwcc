@@ -9,7 +9,7 @@ typedef int uintptr_t;
 
 //unsigned shit lol;
 
-int value3;
+int value3 = 69;
 
 //int value4 = (short)6;
 

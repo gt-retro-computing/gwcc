@@ -140,7 +140,7 @@ class Frontend(object):
             var_name = '_' + str(self.current_scope.name) + '_' + node.name
             il_var = il.Variable(var_name, var_type, ref_level, ref_type)
 
-            if self.scope_depth > 0: # we are in a function -> this is a local decl.
+            if self.scope_depth > 1: # we are in a function -> this is a local decl.
                 if node.init:
                     init_expr_var = self.on_expr_node(node.init)
                     self.add_stmt(self.on_assign(il_var, init_expr_var))
@@ -150,10 +150,10 @@ class Frontend(object):
                 init = None
                 if node.init:
                     if type(node.init) == c_ast.Constant:
-                        init = self.on_constant_node(node)
+                        init = node.init.value
                     else:
                         raise RuntimeError('global variable initialisers must be constant')
-                self._globals[node.name] = il.GlobalName(node.name, il_var, init, self.cur_pragma_loc)
+                self._globals.append(il.GlobalName(node.name, il_var, init, self.cur_pragma_loc))
             self._c_variables[node] = il_var
             return il_var
 
