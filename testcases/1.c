@@ -35,7 +35,7 @@ int cock;
     lolz = (*ptr)++;
     ptr++;
     ptr += 777;
-    int lol = *ptr += 888;
+    int lol = *ptr += 0x888;
     z = (x = y);
     }
     if (1) while (1) {

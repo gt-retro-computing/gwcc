@@ -150,7 +150,7 @@ class Frontend(object):
                 init = None
                 if node.init:
                     if type(node.init) == c_ast.Constant:
-                        init = node.init.value
+                        const_type, init = Frontend.get_constant_value(node.init)
                     else:
                         raise RuntimeError('global variable initialisers must be constant')
                 self._globals.append(il.GlobalName(node.name, il_var, init, self.cur_pragma_loc))
@@ -167,11 +167,6 @@ class Frontend(object):
 
     def on_assign(self, dst, src):
         assert type(dst) == il.Variable
-        assert type(src) == il.Variable or type(src) == il.Constant
-
-        # if src is a constant, load it into a temporary
-        if type(src) == il.Constant:
-            src = self.on_constant(src.type, src.value)
         assert type(src) == il.Variable
 
         if dst.type != src.type:
@@ -180,7 +175,8 @@ class Frontend(object):
                 assert dst.ref_level > 0
                 ptr_size = self.target_arch.sizeof(dst.ref_type)
                 if ptr_size > 1:
-                    src = self.on_binary_op(src, self.on_constant(src.type, ptr_size), il.BinaryOp.Mul)
+                    const_var = self.on_constant(src.type, Frontend.make_int_constant(ptr_size))
+                    src = self.on_binary_op(src, const_var, il.BinaryOp.Mul)
             return il.CastStmt(dst, src)
         else:
             assert dst.ref_level == src.ref_level
@@ -235,7 +231,8 @@ class Frontend(object):
             false_block = self.cur_func.cfg.new_block()
         else:
             false_block = end_block
-        self.add_stmt(il.CondJumpStmt(true_block, false_block, cond_val, il.ComparisonOp.Neq, il.Constant(0, cond_val.type)))
+        self.add_stmt(il.CondJumpStmt(true_block, false_block, cond_val, il.ComparisonOp.Neq,
+                                      il.Constant(Frontend.make_int_constant(0), cond_val.type)))
 
         # handle iftrue
         self.cur_block = true_block
@@ -357,7 +354,8 @@ class Frontend(object):
         # handle cond
         self.cur_block = cond_block
         cond_var = self.on_expr_node(node.cond)
-        self.add_stmt(il.CondJumpStmt(stmt_block, end_block, cond_var, il.ComparisonOp.Neq, il.Constant(0, cond_var.type)))
+        self.add_stmt(il.CondJumpStmt(stmt_block, end_block, cond_var, il.ComparisonOp.Neq,
+                                      il.Constant(Frontend.make_int_constant(0), cond_var.type)))
 
         # handle stmt
         self.cur_block = stmt_block
@@ -438,14 +436,25 @@ class Frontend(object):
         self.cur_block = self.cur_func.cfg.new_block()
 
     def on_constant(self, const_type, value):
+        assert type(value) == il.CompiledValue
         il_var = self.cur_func.new_temporary(const_type, 0, None)
         assign_stmt = il.ConstantStmt(il_var, il.Constant(value, const_type))
         self.add_stmt(assign_stmt)
         return il_var
 
     def on_constant_node(self, node):
+        const_type, value = Frontend.get_constant_value(node)
+        return self.on_constant(const_type, value)
+
+
+    @staticmethod
+    def make_int_constant(value):
+        return il.CompiledValue(value, il.CompiledValueType.Integer)
+
+    @staticmethod
+    def get_constant_value(node):
         if node.type == 'int':
-            return self.on_constant(il.Types.int, node.value)
+            return il.Types.int, Frontend.make_int_constant(int(node.value, 0))
         else:
             raise RuntimeError('unsupported constant type ' + node.type)
 
@@ -456,7 +465,7 @@ class Frontend(object):
 
     def on_preincrement_node(self, expr_node):
         # this is kinda hacky but w/e
-        return self.on_assign_node(c_ast.Assignment('+=', expr_node, c_ast.Constant('int', 1)))
+        return self.on_assign_node(c_ast.Assignment('+=', expr_node, c_ast.Constant('int', '1')))
 
     def on_postdecrement_node(self, expr_node):
         expr_var = self.on_expr_node(expr_node)
@@ -464,12 +473,12 @@ class Frontend(object):
         return expr_var
 
     def on_predecrement_node(self, expr_node):
-        return self.on_assign_node(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', 1)))
+        return self.on_assign_node(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', '1')))
 
     def on_sizeof_node(self, sizeof_node):
         typ = self.get_node_type(sizeof_node.type)
         type_size = self.target_arch.sizeof(typ)
-        return self.on_constant(il.Types.int, type_size)
+        return self.on_constant(il.Types.int, Frontend.make_int_constant(type_size))
 
     def on_unary_op_node(self, node):
         if node.op == 'p++':

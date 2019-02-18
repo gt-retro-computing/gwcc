@@ -81,8 +81,30 @@ class Variable(object):
     def __hash__(self):
         return hash(self.name)
 
+class CompiledValueType(Enum):
+    Integer = 'Integer'
+    WordArray = 'WordArray'
+    Pointer = 'Pointer'
+
+class CompiledValue(object):
+    """
+    Represents a compile-time constant for the backend to emit.
+    """
+    def __init__(self, value, typ):
+        assert typ.parent == CompiledValueType
+        self.value = value
+        self.type = typ
+
+        if typ == CompiledValueType.WordArray:
+            assert type(value) == list
+        elif typ == CompiledValueType.Integer:
+            assert type(value) == int
+        elif typ == CompiledValueType.Pointer:
+            assert type(value) == str
+
 class Constant(object):
     def __init__(self, value, typ):
+        assert type(value) == CompiledValue
         assert typ.parent == Types
         self.value = value
         self.type = typ
@@ -423,9 +445,8 @@ class GlobalName(object):
     function, or a global variable.
     """
     def __init__(self, name, value, init=None, location=0):
+        assert init is None or type(init) == CompiledValue
         self.name = name
         self.value = value
         self.init = init
         self.location = location
-        if type(value) not in [Variable, Function]:
-            raise ValueError('GlobalName should describe functions or global variables')
