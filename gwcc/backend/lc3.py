@@ -21,6 +21,13 @@ class Relocation(object):
         def __repr__(self):
             return 'r!' + self.name
 
+class StackAddress(object):
+    def __init__(self, bp_offset):
+        self.bp_offset = bp_offset
+
+    def __repr__(self):
+        return 'bp-%xh' % (self.bp_offset,)
+
 class LC3(object):
     """
     --- The LC3 GANGWEED C BINARY ABI ---
@@ -258,6 +265,16 @@ class LC3(object):
         else:
             raise RuntimeError('type %s not supported by this backend' % (var.type,))
 
+    def vl_load_local(self, dst_reg, bp_offset):
+        bp_delta = 0
+        while bp_offset > 32:
+            self.emit_insn('ADD %s, %s, #-16' % (self.bp, self.bp))
+            bp_offset -= 16
+            bp_delta += 16
+        self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, bp_offset))
+        while bp_delta:
+            self.emit_insn('ADD %s, %s, #16' % (self.bp, self.bp))
+            bp_delta -= 16
 
     def emit_function(self, glob):
         self.place_relocation(glob.name)
@@ -267,23 +284,25 @@ class LC3(object):
         # with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
         #     func.dump_graph(fd=f)
 
-        # function prologue
-        locals_size = 0
-        for local in func.locals:
-            locals_size += ABI.sizeof(local.type)
-        self.emit_func_prologue(locals_size)
-
-        # let's cop liveness
-        liveness = LivenessAnalysis(func).compute_liveness()
-
         # all registers is available to us except bp and sp.
         register_desc = {} # maps from registers to what temps it stores.
         for reg in ['r0', 'r1', 'r2', 'r3', 'r4', 'r7']:
             register_desc[reg] = []
+
+        cur_sp_offset = 0 # offset from bp: bp-sp
         address_desc = {} # maps from temps to where it is stored (reg or mem).
+        for i, local in enumerate(func.locals):
+            address_desc[local] = StackAddress(cur_sp_offset)
+            cur_sp_offset += ABI.sizeof(local.type)
+
+        # function prologue
+        self.emit_func_prologue(cur_sp_offset)
 
         # linearize the cfg
         blocks = cfg.topoorder(func.cfg)
+
+        # let's cop liveness
+        liveness = LivenessAnalysis(func).compute_liveness()
 
         fd = open('tmp_liveness_debug.dot', 'w')
         print >> fd, "digraph \"%s\" {" % ('CFG',)
@@ -322,14 +341,12 @@ class LC3(object):
         self.cl_push('r3')
         self.cl_push('r4')
         self.cl_move(self.bp, self.sp)
+
         self.emit_comment('sub sp, %d' % (locals_size,))
-        if locals_size > 63: # lol
-            raise RuntimeError('too many locals X(')
-        if locals_size > 31:
-            self.vl_load_reg(self.rp, locals_size)
-            self.cl_sub(self.sp, self.rp)
-        else:
-            self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, locals_size))
+        while locals_size > 16:
+            self.emit_insn('ADD %s, %s, #-16' % (self.bp, self.bp))
+            locals_size -= 16
+        self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, locals_size))
 
     def emit_func_epilogue(self):
         self.emit_comment('leave')
