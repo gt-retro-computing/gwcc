@@ -238,7 +238,7 @@ class LC3(object):
         Emits a compiler-generated stub to setup the stack and shit
         """
         self.cl_load_reg(LC3.bp, 0xbfff)
-        self.cl_load_reg(LC3.sp, 0xbfff)
+        self.cl_move(LC3.sp, LC3.bp)
         self.reloc_jump_to(self.mangle_name('main'))
 
     def emit_global_variable(self, glob):
@@ -285,17 +285,34 @@ class LC3(object):
         # linearize the cfg
         blocks = cfg.topoorder(func.cfg)
 
+        fd = open('tmp_liveness_debug.dot', 'w')
+        print >> fd, "digraph \"%s\" {" % ('CFG',)
         for bb in blocks:
             # statement-level live-out sets
             stmt_liveness = [set() for _ in range(len(bb.stmts))]
             stmt_liveness[-1].update(liveness.live_out(bb))
-            for i in range(len(bb.stmts) - 1, -1, -1):
+            for i in range(len(bb.stmts) - 1, 0, -1):
                 stmt = bb.stmts[i]
-                stmt_liveness[i].discard(il.defed_var(stmt))
-                stmt_liveness[i].update(il.used_vars(stmt))
+                stmt_liveness[i - 1].update(stmt_liveness[i])
+                stmt_liveness[i - 1].discard(il.defed_var(stmt))
+                stmt_liveness[i - 1].update(il.used_vars(stmt))
+            label = "== Block %s ==" % bb.name + '\\l'
+            label += 'LIVE IN: ' + self.liveness_set_to_str(liveness.live_in(bb)) + '\\l'
+            for i in range(len(bb.stmts)):
+                label += str(bb.stmts[i]) + '\\l'
+                label += '    ' + self.liveness_set_to_str(stmt_liveness[i]) + '\\l'
+            label += 'LIVE OUT: ' + self.liveness_set_to_str(liveness.live_out(bb)) + '\\l'
+            print >> fd, "    %s [shape=box, label=\"%s\"]" % (bb.name, label)
+        for bb in func.cfg.basic_blocks:
+            for edge in func.cfg.get_edges(bb):
+                print >> fd, "%s -> %s;" % (edge.src, edge.dst)
+        print >>fd, "}\n"
+        fd.close()
 
         self.emit_func_epilogue()
 
+    def liveness_set_to_str(self, live):
+        return '(' + ', '.join(map(lambda v: v.name, live)) + ')'
 
     def emit_func_prologue(self, locals_size):
         self.cl_push(self.rp)

@@ -331,7 +331,7 @@ def used_vars(stmt):
     elif typ == DerefReadStmt:
         return [stmt.ptr]
     elif typ == DerefWriteStmt:
-        return [stmt.src]
+        return [stmt.ptr, stmt.src]
     elif typ == CommentStmt:
         return []
     else:
@@ -362,7 +362,7 @@ def defed_var(stmt):
     elif typ == DerefReadStmt:
         return stmt.dst
     elif typ == DerefWriteStmt:
-        return stmt.src
+        return None
     elif typ == CommentStmt:
         return None
 
