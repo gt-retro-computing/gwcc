@@ -237,7 +237,7 @@ class LC3(object):
         """
         Emits a compiler-generated stub to setup the stack and shit
         """
-        self.cl_load_reg(LC3.bp, 0x2)
+        self.cl_load_reg(LC3.bp, 0xFFFF)
         self.cl_load_reg(LC3.sp, 0xffff)
         self.reloc_jump_to(self.mangle_name('main'))
 
