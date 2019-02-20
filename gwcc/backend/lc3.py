@@ -111,9 +111,6 @@ class RegisterAllocator(object):
                 self.address_desc[local].add(spill_dst)
                 self.address_desc[local].remove(reg)
 
-        if not spill_dst:
-            raise RuntimeError('tried to spill a register that did not require spilling')
-
         # this register is now free
         self.register_desc[reg].clear()
 
@@ -122,15 +119,33 @@ class RegisterAllocator(object):
     def has_been_spilled(self, local):
         return any(map(lambda location: type(location) == StackLocation, self.address_desc[local]))
 
-    def getreg(self, live_out, dst_var, src_var):
+    def get_loc(self, local):
+        # prefer register
+        for location in self.address_desc[local]:
+            if type(location) == RegisterLocation:
+                return location
+        for location in self.address_desc[local]:
+            return location
+        raise RuntimeError('local %s has not been scheduled' % (local,))
+
+
+    def getreg(self, live_out, src_local, no_spill):
+        """
+        Register allocator
+        :param live_out: statement-level live-out sets
+        :param src_local: local whose register we will prefer to overwrite
+        :param no_spill: registers to not spill
+        :return: new available register
+        """
         # 1. if the name B is in a register that holds the value of no other names,
         # and B is not live out of the statement, then return that register B for L.
-        src_regs = filter(lambda add_desc: type(add_desc) == RegisterLocation, self.address_desc[src_var])
-        for src_reg in src_regs:
-            if len(self.register_desc[src_reg]) == 1:
-                assert self.register_desc[src_reg] == src_var
-                if src_var not in live_out:
-                    return src_reg
+        if src_local:
+            src_regs = filter(lambda add_desc: type(add_desc) == RegisterLocation, self.address_desc[src_local])
+            for src_reg in src_regs:
+                if len(self.register_desc[src_reg]) == 1:
+                    assert self.register_desc[src_reg] == src_local
+                    if src_local not in live_out:
+                        return src_reg
 
         # 2. failing (1), return an empty register for L if there is one.
         for reg in self.register_set:
@@ -140,17 +155,20 @@ class RegisterAllocator(object):
         # 3. failing (2), spill some other register variable to memory to make room.
         # prefer register where, for all temporaries currently stored in the register, have been spilled already
         for reg in self.register_set:
-            if all(map(self.has_been_spilled, self.register_desc[reg])):
-                return reg
+            if reg != no_spill:
+                if all(map(self.has_been_spilled, self.register_desc[reg])):
+                    self.spill_reg(reg)
+                    return reg
 
         # ok, we have to emit a spill copy. but still, avoid spilling src_var.
         for reg in self.register_set:
-            if src_var not in self.register_desc[reg]:
-                spill_dst = self.spill_reg(reg)
-                self.spill_callback(spill_dst, reg)
-                return reg
+            if reg != no_spill:
+                if self.register_desc[reg]:
+                    spill_dst = self.spill_reg(reg)
+                    self.spill_callback(spill_dst, reg)
+                    return reg
 
-        raise RuntimeError("couldn't allocate register for variable " + dst_var)
+        raise RuntimeError("couldn't allocate register")
 
 class LC3(object):
     """
@@ -445,10 +463,10 @@ class LC3(object):
         # let's cop liveness
         liveness = LivenessAnalysis(func).compute_liveness()
 
+        # debug print the statement liveness
         fd = open('tmp_liveness_debug.dot', 'w')
         print >> fd, "digraph \"%s\" {" % ('CFG',)
         for bb in blocks:
-            # statement-level live-out sets
             stmt_liveness = [set() for _ in range(len(bb.stmts))]
             stmt_liveness[-1].update(liveness.live_out(bb))
             for i in range(len(bb.stmts) - 1, 0, -1):
@@ -469,7 +487,56 @@ class LC3(object):
         print >>fd, "}\n"
         fd.close()
 
+        for bb in blocks:
+            self.emit_basic_block(bb, reg_alloc)
+
         self.emit_func_epilogue()
+
+    def emit_basic_block(self, bb, reg_alloc):
+        # statement-level live-out sets
+        live_out = [set() for _ in range(len(bb.stmts))]
+        live_out[-1].update(liveness.live_out(bb))
+        for i in range(len(bb.stmts) - 1, 0, -1):
+            stmt = bb.stmts[i]
+            live_out[i - 1].update(live_out[i])
+            live_out[i - 1].discard(il.defed_var(stmt))
+            live_out[i - 1].update(il.used_vars(stmt))
+
+        for stmt in bb.stmts:
+            typ = type(stmt)
+            dst_local = il.defed_var(stmt)
+            src_locals = il.used_vars(stmt)
+            dst_reg = reg_alloc.getreg(live_out, src_locals[0], None)
+            b_loc = reg_alloc.get_loc(src_locals[0])
+            if type(b_loc) == StackLocation:
+                self.vl_load_local(dst_reg, b_loc.bp_offset)
+            elif type(b_loc) == RegisterLocation:
+                if dst_reg != b_loc.reg:
+                    self.cl_move(dst_reg, b_loc.reg)
+                    if src_locals[0] not in live_out:
+                        reg_alloc.register_desc[b_loc.reg].remove(src_locals[0])
+            else:
+                assert False
+
+            # update reg alloc metadata
+            reg_alloc.address_desc[dst_local].add(dst_reg)
+            reg_alloc.register_desc[dst_reg].add(dst_local)
+
+            if len(src_locals) > 1:
+                c_loc = reg_alloc.get_loc(src_locals[1])
+                if type(c_loc) == StackLocation:
+                    c_reg = reg_alloc(live_out, None, dst_reg)
+                    self.vl_load_local(c_reg, c_loc.bp_offset)
+                elif type(c_loc) == RegisterLocation:
+                    c_reg = c_loc.reg
+                else:
+                    assert False
+                if src_locals[1] not in live_out:
+                    reg_alloc.register_desc[c_reg].remove(src_locals[1])
+
+            if typ == il.BinaryStmt:
+                dst_local = reg_alloc
+
 
     def emit_func_prologue(self, locals_size):
         self.cl_push(self.rp)
