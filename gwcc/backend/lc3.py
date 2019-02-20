@@ -1,3 +1,4 @@
+from collections import defaultdict
 from ..optimization.dataflow import LivenessAnalysis
 from .. import il
 from .. import cfg
@@ -21,12 +22,135 @@ class Relocation(object):
         def __repr__(self):
             return 'r!' + self.name
 
-class StackAddress(object):
+class StackLocation(object):
     def __init__(self, bp_offset):
         self.bp_offset = bp_offset
 
     def __repr__(self):
-        return 'bp-%xh' % (self.bp_offset,)
+        if self.bp_offset >= 0:
+            return '@[bp+%xh]' % (self.bp_offset,)
+        else:
+            return '@[bp-%xh]' % (self.bp_offset,)
+
+    def __eq__(self, other):
+        return type(other) == StackLocation and other.bp_offset == self.bp_offset
+
+    def __hash__(self):
+        return hash((1, self.bp_offset))
+
+class RegisterLocation(object):
+    def __init__(self, reg):
+        self.reg = reg
+
+    def __repr__(self):
+        return '@%s' % (self.reg,)
+
+    def __eq__(self, other):
+        return type(other) == RegisterLocation and other.reg == self.reg
+
+    def __hash__(self):
+        return hash((2, self.reg))
+
+class RegisterAllocator(object):
+    register_set = ['r0', 'r1', 'r2', 'r3', 'r4', 'r7']
+
+    def __init__(self, spill_callback):
+        self.spill_callback = spill_callback
+
+        # all registers is available to us except bp and sp.
+        self.register_desc = {}  # maps from registers to what temps it stores.
+        for reg in self.register_set:
+            self.register_desc[reg] = set()
+
+        self.address_desc = defaultdict(set)  # maps from temps to where it is stored (reg or mem).
+
+        self.stack_slots = []
+
+    @property
+    def cur_bp_offset(self):
+        return len(self.stack_slots)
+
+    def alloc_stack(self, local):
+        assert type(local) == il.Variable
+        size = ABI.sizeof(local.type)
+        for i in range(len(self.stack_slots)-size):
+            for j in range(size):
+                if self.stack_slots[i+j] is not None:
+                    break
+            else:
+                slot_index = i
+                break
+        else:
+            slot_index = len(self.stack_slots)
+            self.stack_slots.extend([None] * size)
+
+        self.stack_slots[slot_index:slot_index+size] = [1] * size
+        return StackLocation(slot_index)
+
+    def dealloc_stack(self, stack_address, size):
+        self.stack_slots[stack_address:stack_address+size] = [None] * size
+
+    def spill_reg(self, reg):
+        """
+        Free up a register by spilling all locals currently stored in it to the stack.
+        :param reg: register to spill
+        :return: spill destination that the register's old contents must be copied to
+        """
+        assert type(reg) == RegisterLocation
+
+        spill_dst = None
+        size = 0
+        # spill all locals stored in this register, if they have not been spilled already.
+        for local in self.register_desc[reg]:
+            if not self.has_been_spilled(local):
+                if not spill_dst:
+                    spill_dst = self.alloc_stack(local)
+                    size = ABI.sizeof(local)
+                else:
+                    assert size == ABI.sizeof(local)
+                self.address_desc[local].add(spill_dst)
+                self.address_desc[local].remove(reg)
+
+        if not spill_dst:
+            raise RuntimeError('tried to spill a register that did not require spilling')
+
+        # this register is now free
+        self.register_desc[reg].clear()
+
+        return spill_dst
+
+    def has_been_spilled(self, local):
+        return any(map(lambda location: type(location) == StackLocation, self.address_desc[local]))
+
+    def getreg(self, live_out, dst_var, src_var):
+        # 1. if the name B is in a register that holds the value of no other names,
+        # and B is not live out of the statement, then return that register B for L.
+        src_regs = filter(lambda add_desc: type(add_desc) == RegisterLocation, address_desc[src_var])
+        for src_reg in src_regs:
+            if len(self.register_desc[src_reg]) == 1:
+                assert self.register_desc[src_reg] == src_var
+                if src_var not in live_out:
+                    return src_reg
+
+        # 2. failing (1), return an empty register for L if there is one.
+        for reg in self.register_set:
+            if not self.register_desc[reg]:
+                return reg
+
+        # 3. failing (2), spill some other register variable to memory to make room.
+        # prefer register where, for all temporaries currently stored in the register, have been spilled already
+        for reg in self.register_set:
+            if all(map(self.has_been_spilled, self.register_desc[reg])):
+                return reg
+
+        # ok, we have to emit a spill copy. but still, avoid spilling src_var.
+        for reg in self.register_set:
+            if src_var not in self.register_desc[reg]:
+                spill_dst = self.spill_reg(reg)
+                self.spill_callback(spill_dst, reg)
+                return reg
+
+        raise RuntimeError("couldn't allocate register for variable " + dst_var)
 
 class LC3(object):
     """
@@ -265,16 +389,32 @@ class LC3(object):
         else:
             raise RuntimeError('type %s not supported by this backend' % (var.type,))
 
-    def vl_load_local(self, dst_reg, bp_offset):
-        bp_delta = 0
-        while bp_offset > 32:
+    def vl_shift_bp(self, bp_offset, callback):
+        bp_delta = 0 # how much the bp moved, so how much we have to unshift it by
+        while bp_offset < -32:
             self.emit_insn('ADD %s, %s, #-16' % (self.bp, self.bp))
-            bp_offset -= 16
-            bp_delta += 16
-        self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, bp_offset))
-        while bp_delta:
-            self.emit_insn('ADD %s, %s, #16' % (self.bp, self.bp))
+            bp_offset -= -16
             bp_delta -= 16
+        while bp_offset > 31:
+            self.emit_insn('ADD %s, %s, #15' % (self.bp, self.bp))
+            bp_offset -= 15
+            bp_delta += 15
+
+        callback()
+
+        # move bp back
+        while bp_delta > 16:
+            self.emit_insn('ADD %s, %s, #-16' % (self.bp, self.bp))
+            bp_delta -= 16
+        while bp_delta < -15:
+            self.emit_insn('ADD %s, %s, #15' % (self.bp, self.bp))
+            bp_delta += 15
+
+    def vl_load_local(self, dst_reg, bp_offset):
+        self.vl_shift_bp(bp_offset, lambda: self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, bp_offset)))
+
+    def vl_store_local(self, src_reg, bp_offset):
+        self.vl_shift_bp(bp_offset, lambda: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, bp_offset)))
 
     def emit_function(self, glob):
         self.place_relocation(glob.name)
@@ -283,20 +423,21 @@ class LC3(object):
         # print func.pretty_print()
         # with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
         #     func.dump_graph(fd=f)
+        def liveness_set_to_str(live):
+            return '(' + ', '.join(map(lambda v: v.name, live)) + ')'
 
-        # all registers is available to us except bp and sp.
-        register_desc = {} # maps from registers to what temps it stores.
-        for reg in ['r0', 'r1', 'r2', 'r3', 'r4', 'r7']:
-            register_desc[reg] = []
+        spill_callback = lambda spill_loc, src_reg: self.vl_store_local(src_reg, spill_loc.bp_offset)
+        reg_alloc = RegisterAllocator(spill_callback)
 
-        cur_sp_offset = 0 # offset from bp: bp-sp
-        address_desc = {} # maps from temps to where it is stored (reg or mem).
-        for i, local in enumerate(func.locals):
-            address_desc[local] = StackAddress(cur_sp_offset)
-            cur_sp_offset += ABI.sizeof(local.type)
+        for i, param in enumerate(func.params):
+            reg_alloc.address_desc[param].add(StackLocation(i - 6))
+
+        for local in func.locals:
+            if local not in func.params:
+                reg_alloc.alloc_stack(local)
 
         # function prologue
-        self.emit_func_prologue(cur_sp_offset)
+        self.emit_func_prologue(reg_alloc.cur_bp_offset)
 
         # linearize the cfg
         blocks = cfg.topoorder(func.cfg)
@@ -316,11 +457,11 @@ class LC3(object):
                 stmt_liveness[i - 1].discard(il.defed_var(stmt))
                 stmt_liveness[i - 1].update(il.used_vars(stmt))
             label = "== Block %s ==" % bb.name + '\\l'
-            label += 'LIVE IN: ' + self.liveness_set_to_str(liveness.live_in(bb)) + '\\l'
+            label += 'LIVE IN: ' + liveness_set_to_str(liveness.live_in(bb)) + '\\l'
             for i in range(len(bb.stmts)):
                 label += str(bb.stmts[i]) + '\\l'
-                label += '    ' + self.liveness_set_to_str(stmt_liveness[i]) + '\\l'
-            label += 'LIVE OUT: ' + self.liveness_set_to_str(liveness.live_out(bb)) + '\\l'
+                label += '    ' + liveness_set_to_str(stmt_liveness[i]) + '\\l'
+            label += 'LIVE OUT: ' + liveness_set_to_str(liveness.live_out(bb)) + '\\l'
             print >> fd, "    %s [shape=box, label=\"%s\"]" % (bb.name, label)
         for bb in func.cfg.basic_blocks:
             for edge in func.cfg.get_edges(bb):
@@ -329,9 +470,6 @@ class LC3(object):
         fd.close()
 
         self.emit_func_epilogue()
-
-    def liveness_set_to_str(self, live):
-        return '(' + ', '.join(map(lambda v: v.name, live)) + ')'
 
     def emit_func_prologue(self, locals_size):
         self.cl_push(self.rp)
