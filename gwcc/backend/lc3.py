@@ -24,6 +24,7 @@ class Relocation(object):
 
 class StackLocation(object):
     def __init__(self, bp_offset):
+        assert type(bp_offset) == int
         self.bp_offset = bp_offset
 
     def __repr__(self):
@@ -40,6 +41,7 @@ class StackLocation(object):
 
 class RegisterLocation(object):
     def __init__(self, reg):
+        assert type(reg) == str
         self.reg = reg
 
     def __repr__(self):
@@ -50,6 +52,20 @@ class RegisterLocation(object):
 
     def __hash__(self):
         return hash((2, self.reg))
+
+class MemoryLocation(object):
+    def __init__(self, name):
+        assert type(name) == str
+        self.name = name
+
+    def __repr__(self):
+        return repr(self.name)
+
+    def __eq__(self, other):
+        return type(other) == MemoryLocation and other.var == self.name
+
+    def __hash__(self):
+        return hash((3, self.name))
 
 class RegisterAllocator(object):
     register_set = ['r0', 'r1', 'r2', 'r3', 'r4', 'r7']
@@ -84,8 +100,10 @@ class RegisterAllocator(object):
             slot_index = len(self.stack_slots)
             self.stack_slots.extend([None] * size)
 
+        stack_loc = StackLocation(slot_index)
+        self.address_desc[local].add(stack_loc)
         self.stack_slots[slot_index:slot_index+size] = [1] * size
-        return StackLocation(slot_index)
+        return stack_loc
 
     def dealloc_stack(self, stack_address, size):
         self.stack_slots[stack_address:stack_address+size] = [None] * size
@@ -96,12 +114,13 @@ class RegisterAllocator(object):
         :param reg: register to spill
         :return: spill destination that the register's old contents must be copied to
         """
-        assert type(reg) == RegisterLocation
+        assert reg in self.register_set
 
         spill_dst = None
         size = 0
         # spill all locals stored in this register, if they have not been spilled already.
         for local in self.register_desc[reg]:
+            self.address_desc[local].remove(RegisterLocation(reg))
             if not self.has_been_spilled(local):
                 if not spill_dst:
                     spill_dst = self.alloc_stack(local)
@@ -109,7 +128,6 @@ class RegisterAllocator(object):
                 else:
                     assert size == ABI.sizeof(local)
                 self.address_desc[local].add(spill_dst)
-                self.address_desc[local].remove(reg)
 
         # this register is now free
         self.register_desc[reg].clear()
@@ -123,6 +141,9 @@ class RegisterAllocator(object):
         # prefer register
         for location in self.address_desc[local]:
             if type(location) == RegisterLocation:
+                return location
+        for location in self.address_desc[local]:
+            if type(location) == StackLocation:
                 return location
         for location in self.address_desc[local]:
             return location
@@ -142,10 +163,10 @@ class RegisterAllocator(object):
         if src_local:
             src_regs = filter(lambda add_desc: type(add_desc) == RegisterLocation, self.address_desc[src_local])
             for src_reg in src_regs:
-                if len(self.register_desc[src_reg]) == 1:
-                    assert self.register_desc[src_reg] == src_local
+                if len(self.register_desc[src_reg.reg]) == 1:
+                    assert next(iter(self.register_desc[src_reg.reg])) == src_local
                     if src_local not in live_out:
-                        return src_reg
+                        return src_reg.reg
 
         # 2. failing (1), return an empty register for L if there is one.
         for reg in self.register_set:
@@ -157,6 +178,7 @@ class RegisterAllocator(object):
         for reg in self.register_set:
             if reg != no_spill:
                 if all(map(self.has_been_spilled, self.register_desc[reg])):
+                    print 'spilling %s, but no copy is required.' % (reg,)
                     self.spill_reg(reg)
                     return reg
 
@@ -165,10 +187,43 @@ class RegisterAllocator(object):
             if reg != no_spill:
                 if self.register_desc[reg]:
                     spill_dst = self.spill_reg(reg)
+                    print 'spilling %s to %s' % (reg, spill_dst)
                     self.spill_callback(spill_dst, reg)
                     return reg
 
         raise RuntimeError("couldn't allocate register")
+
+    def store_reg(self, reg, local):
+        """
+        Updates metadata to reflect that 'local' is stored in 'reg'.
+        """
+        assert type(reg) == RegisterLocation
+        assert type(local) == il.Variable
+        self.address_desc[local].add(reg)
+        self.register_desc[reg.reg].add(local)
+        print '%s is now stored in %s' % (local,reg.reg)
+
+    def free_reg(self, reg, local):
+        """
+        Updates metadata to reflect that 'local' is no longer stored in 'reg'.
+        """
+        assert type(reg) == RegisterLocation
+        assert type(local) == il.Variable
+        self.register_desc[reg.reg].remove(local)
+        self.address_desc[local].remove(reg)
+        print 'reg %s is no longer storing %s' % (reg.reg, local)
+
+    def add_global(self, global_name, memory_loc):
+        assert type(global_name) == il.GlobalName
+        assert type(memory_loc) == MemoryLocation
+        if type(global_name.value) == il.Variable:
+            self.address_desc[global_name.value].add(memory_loc)
+        elif type(global_name.value) == il.Function:
+            pass
+        else:
+            print global_name.value
+            assert False
+
 
 class LC3(object):
     """
@@ -197,7 +252,7 @@ class LC3(object):
         assert all(map(lambda e: type(e) == il.GlobalName, names))
 
         # input
-        self._names = names
+        self._global_names = names
 
         # state
         self._mappings = {} # where all the global vars are gettin allocated
@@ -222,7 +277,7 @@ class LC3(object):
     def place_relocation(self, name):
         self.emit_newline()
         self.emit_comment('symbol: %s' % (name,))
-        self._mappings[self.mangle_name(name)] = self._cur_binary_loc
+        self._mappings[name] = self._cur_binary_loc
 
     def is_name_mapped(self, name):
         return name in self._mappings
@@ -388,7 +443,7 @@ class LC3(object):
         """
         self.cl_load_reg(LC3.bp, 0xfeff)
         self.cl_move(LC3.sp, LC3.bp)
-        self.reloc_jump_to(self.mangle_name('main'))
+        self.reloc_jump_to('main')
 
     def emit_global_variable(self, glob):
         self.place_relocation(glob.name)
@@ -447,12 +502,15 @@ class LC3(object):
         spill_callback = lambda spill_loc, src_reg: self.vl_store_local(src_reg, spill_loc.bp_offset)
         reg_alloc = RegisterAllocator(spill_callback)
 
+        for global_name in self._global_names:
+            reg_alloc.add_global(global_name, MemoryLocation(global_name.name))
+
         for i, param in enumerate(func.params):
             reg_alloc.address_desc[param].add(StackLocation(i - 6))
 
         for local in func.locals:
             if local not in func.params:
-                reg_alloc.alloc_stack(local)
+                local_loc = reg_alloc.alloc_stack(local)
 
         # function prologue
         self.emit_func_prologue(reg_alloc.cur_bp_offset)
@@ -488,54 +546,82 @@ class LC3(object):
         fd.close()
 
         for bb in blocks:
-            self.emit_basic_block(bb, reg_alloc)
+            self.emit_basic_block(bb, liveness, reg_alloc)
 
         self.emit_func_epilogue()
 
-    def emit_basic_block(self, bb, reg_alloc):
+    def emit_basic_block(self, bb, liveness, reg_alloc):
         # statement-level live-out sets
-        live_out = [set() for _ in range(len(bb.stmts))]
-        live_out[-1].update(liveness.live_out(bb))
+        stmt_liveness = [set() for _ in range(len(bb.stmts))]
+        stmt_liveness[-1].update(liveness.live_out(bb))
         for i in range(len(bb.stmts) - 1, 0, -1):
             stmt = bb.stmts[i]
-            live_out[i - 1].update(live_out[i])
-            live_out[i - 1].discard(il.defed_var(stmt))
-            live_out[i - 1].update(il.used_vars(stmt))
+            stmt_liveness[i - 1].update(stmt_liveness[i])
+            stmt_liveness[i - 1].discard(il.defed_var(stmt))
+            stmt_liveness[i - 1].update(il.used_vars(stmt))
 
-        for stmt in bb.stmts:
-            typ = type(stmt)
+        for i, stmt in enumerate(bb.stmts):
+            live_out = stmt_liveness[i]
+            print 'SCHEDULING ' + str(stmt)
+
+            # Register scheduling
             dst_local = il.defed_var(stmt)
             src_locals = il.used_vars(stmt)
-            dst_reg = reg_alloc.getreg(live_out, src_locals[0], None)
-            b_loc = reg_alloc.get_loc(src_locals[0])
-            if type(b_loc) == StackLocation:
-                self.vl_load_local(dst_reg, b_loc.bp_offset)
-            elif type(b_loc) == RegisterLocation:
-                if dst_reg != b_loc.reg:
-                    self.cl_move(dst_reg, b_loc.reg)
-                    if src_locals[0] not in live_out:
-                        reg_alloc.register_desc[b_loc.reg].remove(src_locals[0])
-            else:
-                assert False
 
-            # update reg alloc metadata
-            reg_alloc.address_desc[dst_local].add(dst_reg)
-            reg_alloc.register_desc[dst_reg].add(dst_local)
-
-            if len(src_locals) > 1:
-                c_loc = reg_alloc.get_loc(src_locals[1])
-                if type(c_loc) == StackLocation:
-                    c_reg = reg_alloc(live_out, None, dst_reg)
-                    self.vl_load_local(c_reg, c_loc.bp_offset)
-                elif type(c_loc) == RegisterLocation:
-                    c_reg = c_loc.reg
+            if len(src_locals) > 0:
+                b_local = src_locals[0]
+                dst_reg = reg_alloc.getreg(live_out, b_local, None)
+                b_loc = reg_alloc.get_loc(b_local)
+                if type(b_loc) == StackLocation:
+                    self.vl_load_local(dst_reg, b_loc.bp_offset)
+                elif type(b_loc) == RegisterLocation:
+                    if dst_reg != b_loc.reg:
+                        self.cl_move(dst_reg, b_loc.reg)
+                        if b_local not in live_out:
+                            print 'free1'
+                            reg_alloc.free_reg(b_loc, b_local)
+                elif type(b_loc) == MemoryLocation:
+                    self.reloc_load_address(dst_reg, b_loc.name)
                 else:
                     assert False
-                if src_locals[1] not in live_out:
-                    reg_alloc.register_desc[c_reg].remove(src_locals[1])
+            else:
+                dst_reg = reg_alloc.getreg(live_out, None, None)
 
+            if dst_local:
+                reg_alloc.store_reg(RegisterLocation(dst_reg), dst_local)
+
+            if len(src_locals) > 1:
+                c_local = src_locals[1]
+                c_loc = reg_alloc.get_loc(c_local)
+                if type(c_loc) == StackLocation:
+                    c_reg = reg_alloc.getreg(live_out, None, dst_reg)
+                    self.vl_load_local(c_reg, c_loc.bp_offset)
+                    if c_local in live_out:
+                        reg_alloc.store_reg(c_reg, c_local)
+                elif type(c_loc) == RegisterLocation:
+                    c_reg = c_loc.reg
+                    if c_local not in live_out:
+                        print 'free2'
+                        reg_alloc.free_reg(c_loc, c_local)
+                elif type(c_loc) == MemoryLocation:
+                    c_reg = reg_alloc.getreg(live_out, None, dst_reg)
+                    self.reloc_load_address(c_reg, c_loc.name)
+                    if c_local in live_out:
+                        reg_alloc.store_reg(c_reg, c_local)
+                else:
+                    assert False
+            else:
+                c_reg = None
+
+            print 'dst = %s, operand = %s' % (dst_reg, c_reg if c_reg else 'None')
+
+            typ = type(stmt)
             if typ == il.BinaryStmt:
                 dst_local = reg_alloc
+            elif typ == il.UnaryStmt:
+                if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
+                    print 'MOVE detected'
+                    reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src)
 
 
     def emit_func_prologue(self, locals_size):
@@ -585,11 +671,11 @@ class LC3(object):
         self.emit_stub()
 
         # emit globals then funcs
-        global_vars = filter(lambda name: type(name.value) == il.Variable, self._names)
+        global_vars = filter(lambda name: type(name.value) == il.Variable, self._global_names)
         for var in global_vars:
             self.emit_global_name(var)
 
-        functions = filter(lambda name: type(name.value) == il.Function, self._names)
+        functions = filter(lambda name: type(name.value) == il.Function, self._global_names)
         for func in functions:
             self.emit_global_name(func)
 

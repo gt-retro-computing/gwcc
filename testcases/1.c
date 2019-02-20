@@ -15,11 +15,15 @@ unsigned lol;
 int value3 = 69;
 
 //int value4 = (short)6;
+int foo() {
+    return 5;
+}
 
 int main(int argc, char** argv) {
 int cock;
     char* test = *argv;
     long meme;
+//    int(*fucker)() =foo;
     long* lol = &meme;
     lol += asdf;
     int wowza = value3+6969+sizeof(int);
@@ -58,9 +62,6 @@ int cock;
 //    return 0;
 }
 
-//int foo() {
-//    return 5;
-//}
 //
 //int bar() {
 //    return 6;
