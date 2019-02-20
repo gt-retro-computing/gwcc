@@ -195,7 +195,7 @@ class RegisterAllocator(object):
         # 3. failing (2), spill some other register variable to memory to make room.
         # prefer register where, for all temporaries currently stored in the register, have been spilled already
         for reg in self.register_set:
-            if reg != no_spill:
+            if reg not in no_spill:
                 if all(map(self.has_been_spilled, self.register_desc[reg])):
                     print 'spilling %s, but no copy is required.' % (reg,)
                     self.spill_reg(reg)
@@ -203,7 +203,7 @@ class RegisterAllocator(object):
 
         # ok, we have to emit a spill copy. but still, avoid spilling src_var.
         for reg in self.register_set:
-            if reg != no_spill:
+            if reg not in no_spill:
                 if self.register_desc[reg]:
                     spill_dst = self.spill_reg(reg)
                     print 'spilling %s to %s' % (reg, spill_dst)
@@ -256,6 +256,7 @@ class LC3(object):
     bp = 'r5' # basepointer basepointer basepointer basepointer
     sp = 'r6' # stack pointer
     rp = 'r7' # return pointer
+    retval_reg = 'r0'
 
     def __init__(self, names):
         assert all(map(lambda e: type(e) == il.GlobalName, names))
@@ -373,8 +374,11 @@ class LC3(object):
         """
         self.emit_insn('AND %s, %s, #0' % (reg, reg))
 
-    def cl_twos(self, reg):
+    def cl_ones(self, reg):
         self.emit_insn('NOT %s, %s' % (reg, reg))
+
+    def cl_twos(self, reg):
+        self.cl_ones(reg)
         self.emit_insn('ADD %s, %s, #1' % (reg, reg))
 
     def cl_push(self, src_reg):
@@ -398,7 +402,16 @@ class LC3(object):
         self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, src_reg))
         self.cl_twos(src_reg)
 
+    def cl_nand(self, dst_reg, srcA, srcB):
+        self.emit_insn('AND %s, %s, %s' % (dst_reg, srcA, srcB))
+        self.cl_ones(dst_reg)
 
+    def cl_or(self, dst_reg, src_reg):
+        self.emit_comment('or ' + dst_reg + ', ' + src_reg)
+        self.cl_ones(dst_reg)
+        self.cl_ones(src_reg)
+        self.cl_nand(dst_reg, dst_reg, src_reg)
+        self.cl_ones(src_reg)
 
 
 
@@ -420,11 +433,14 @@ class LC3(object):
         """
         self.emit_comment('load: %s <- %d (0x%02x)' % (reg, value, value))
         self.cl_zero_reg(reg)
-        value %= 0x10000
-        while value:
-            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
-            self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
-            value >>= 1
+        if -16 <= value <= 15:
+            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value))
+        else:
+            value %= 0x10000
+            while value:
+                self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
+                self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
+                value >>= 1
 
     def reloc_load_address(self, reg, name):
         if self.is_name_mapped(name):
@@ -493,9 +509,11 @@ class LC3(object):
             bp_delta += 15
 
     def vl_load_local(self, dst_reg, bp_offset):
+        self.emit_comment('mov %s, [bp+%d]' % (dst_reg, bp_offset))
         self.vl_shift_bp(bp_offset, lambda: self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, bp_offset)))
 
     def vl_store_local(self, src_reg, bp_offset):
+        self.emit_comment('mov [bp+%d], %s' % (bp_offset, src_reg))
         self.vl_shift_bp(bp_offset, lambda: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, bp_offset)))
 
     def emit_function(self, glob):
@@ -541,6 +559,8 @@ class LC3(object):
                 stmt_liveness[i - 1].update(stmt_liveness[i])
                 stmt_liveness[i - 1].discard(il.defed_var(stmt))
                 stmt_liveness[i - 1].update(il.used_vars(stmt))
+                if type(stmt) == il.ReturnStmt:
+                    stmt_liveness[i - 1].add(func.retval)
             label = "== Block %s ==" % bb.name + '\\l'
             label += 'LIVE IN: ' + liveness_set_to_str(liveness.live_in(bb)) + '\\l'
             for i in range(len(bb.stmts)):
@@ -555,11 +575,11 @@ class LC3(object):
         fd.close()
 
         for bb in blocks:
-            self.emit_basic_block(bb, liveness, reg_alloc)
+            self.emit_basic_block(bb, func, liveness, reg_alloc)
 
         self.emit_func_epilogue()
 
-    def emit_basic_block(self, bb, liveness, reg_alloc):
+    def emit_basic_block(self, bb, func, liveness, reg_alloc):
         def liveness_set_to_str(live):
             return '(' + ', '.join(map(lambda v: v.name, live)) + ')'
 
@@ -571,6 +591,19 @@ class LC3(object):
             stmt_liveness[i - 1].update(stmt_liveness[i])
             stmt_liveness[i - 1].discard(il.defed_var(stmt))
             stmt_liveness[i - 1].update(il.used_vars(stmt))
+            if type(stmt) == il.ReturnStmt:
+                stmt_liveness[i - 1].add(func.retval)
+
+        def load_reg_from_loc(dst_reg, src_loc):
+            if type(src_loc) == StackLocation:
+                self.vl_load_local(dst_reg, src_loc.bp_offset)
+            elif type(src_loc) == RegisterLocation:
+                if dst_reg != src_loc.reg:
+                    self.cl_move(dst_reg, src_loc.reg)
+            elif type(src_loc) == MemoryLocation:
+                self.reloc_load_address(dst_reg, src_loc.name)
+            else:
+                assert False
 
         for i, stmt in enumerate(bb.stmts):
             live_out = stmt_liveness[i]
@@ -584,21 +617,13 @@ class LC3(object):
 
             if len(src_locals) > 0:
                 b_local = src_locals[0]
-                dst_reg = reg_alloc.getreg(live_out, b_local, None)
+                dst_reg = reg_alloc.getreg(live_out, b_local, [])
                 b_loc = reg_alloc.get_loc(b_local)
-                if type(b_loc) == StackLocation:
-                    self.vl_load_local(dst_reg, b_loc.bp_offset)
-                elif type(b_loc) == RegisterLocation:
-                    if dst_reg != b_loc.reg:
-                        self.cl_move(dst_reg, b_loc.reg)
-                elif type(b_loc) == MemoryLocation:
-                    self.reloc_load_address(dst_reg, b_loc.name)
-                else:
-                    assert False
+                load_reg_from_loc(dst_reg, b_loc)
                 if b_local not in live_out:
                     reg_alloc.free_local(b_local)
             else:
-                dst_reg = reg_alloc.getreg(live_out, None, None)
+                dst_reg = reg_alloc.getreg(live_out, None, [])
 
             if dst_local and dst_local in live_out:
                 reg_alloc.store_reg(RegisterLocation(dst_reg), dst_local)
@@ -606,16 +631,8 @@ class LC3(object):
             if len(src_locals) > 1:
                 c_local = src_locals[1]
                 c_loc = reg_alloc.get_loc(c_local)
-                if type(c_loc) == StackLocation:
-                    c_reg = reg_alloc.getreg(live_out, None, dst_reg)
-                    self.vl_load_local(c_reg, c_loc.bp_offset)
-                elif type(c_loc) == RegisterLocation:
-                    c_reg = c_loc.reg
-                elif type(c_loc) == MemoryLocation:
-                    c_reg = reg_alloc.getreg(live_out, None, dst_reg)
-                    self.reloc_load_address(c_reg, c_loc.name)
-                else:
-                    assert False
+                c_reg = reg_alloc.getreg(live_out, None, [dst_reg])
+                load_reg_from_loc(c_reg, c_loc)
                 if c_local in live_out:
                     reg_alloc.store_reg(RegisterLocation(c_reg), c_local)
                 else:
@@ -628,10 +645,33 @@ class LC3(object):
             typ = type(stmt)
             if typ == il.BinaryStmt:
                 dst_local = reg_alloc
+                if stmt.op == il.BinaryOp.Add:
+                    self.emit_insn("ADD %s, %s, %s" % (dst_reg, dst_reg, c_reg))
+                elif stmt.op == il.BinaryOp.Sub:
+                    self.cl_sub(dst_reg, c_reg)
+                elif stmt.op == il.BinaryOp.And:
+                    self.emit_insn("AND %s, %s, %s" % (dst_reg, dst_reg, c_reg))
+                elif stmt.op == il.BinaryOp.Or:
+                    self.cl_or(dst_reg, c_reg)
+                elif stmt.op == il.BinaryOp.Xor:
+                    tmp_reg = reg_alloc.getreg(live_out, None, [dst_reg, c_reg])
+                    self.cl_or(dst_reg, c_reg)
+                    self.cl_nand(tmp_reg, dst_reg, c_reg)
+                    self.emit_insn("AND %s, %s, %s" % (dst_reg, dst_reg, tmp_reg))
+
+
             elif typ == il.UnaryStmt:
                 if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
                     if dst_local in live_out:
                         reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src) # THIS MOVE HAS SPECIAL SEMANTIC
+
+            elif typ == il.ConstantStmt:
+                self.vl_load_reg(dst_reg, stmt.imm.value.value)
+
+            elif typ == il.ReturnStmt:
+                retvar_loc = reg_alloc.get_loc(func.retval)
+                load_reg_from_loc(self.retval_reg, retvar_loc)
+
 
 
     def emit_func_prologue(self, locals_size):

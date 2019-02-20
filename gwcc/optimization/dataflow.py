@@ -74,3 +74,5 @@ class LivenessAnalysis(object):
             use_vars = il.used_vars(stmt)
             for use_var in use_vars:
                 self._use[bb].add(use_var)
+            if type(stmt) == il.ReturnStmt:
+                self._use[bb].add(self.func.retval)

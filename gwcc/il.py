@@ -175,6 +175,7 @@ class UnaryStmt(object):
 class ConstantStmt(object):
     def __init__(self, dst, imm):
         assert type(dst) == Variable
+        assert type(imm) == Constant
         if dst.type != imm.type:
             raise ValueError('Constant load statement operands must be of equal type')
         self.dst = dst
