@@ -125,7 +125,7 @@ class RegisterAllocator(object):
     def getreg(self, live_out, dst_var, src_var):
         # 1. if the name B is in a register that holds the value of no other names,
         # and B is not live out of the statement, then return that register B for L.
-        src_regs = filter(lambda add_desc: type(add_desc) == RegisterLocation, address_desc[src_var])
+        src_regs = filter(lambda add_desc: type(add_desc) == RegisterLocation, self.address_desc[src_var])
         for src_reg in src_regs:
             if len(self.register_desc[src_reg]) == 1:
                 assert self.register_desc[src_reg] == src_var
@@ -368,7 +368,7 @@ class LC3(object):
         """
         Emits a compiler-generated stub to setup the stack and shit
         """
-        self.cl_load_reg(LC3.bp, 0xbfff)
+        self.cl_load_reg(LC3.bp, 0xfeff)
         self.cl_move(LC3.sp, LC3.bp)
         self.reloc_jump_to(self.mangle_name('main'))
 
@@ -499,8 +499,8 @@ class LC3(object):
 
     def emit_global_name(self, global_name):
         if global_name.location > 0:
-            if global_name.location < 0x3000 or global_name.location > 0xBFFF:
-                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xBFFF' % (global_name.location,))
+            if global_name.location < 0x3000 or global_name.location > 0xFEFF:
+                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xFEFF' % (global_name.location,))
             self.emit_section_end()
             self.emit_orig(global_name.location)
             self._cur_binary_loc = global_name.location
