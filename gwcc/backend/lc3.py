@@ -91,22 +91,41 @@ class RegisterAllocator(object):
         size = ABI.sizeof(local.type)
         for i in range(len(self.stack_slots)-size):
             for j in range(size):
-                if self.stack_slots[i+j] is not None:
+                if self.stack_slots[i+j] != 0:
                     break
             else:
                 slot_index = i
                 break
         else:
             slot_index = len(self.stack_slots)
-            self.stack_slots.extend([None] * size)
+            self.stack_slots.extend([1] * size)
 
         stack_loc = StackLocation(slot_index)
         self.address_desc[local].add(stack_loc)
-        self.stack_slots[slot_index:slot_index+size] = [1] * size
+        for j in range(size):
+            self.stack_slots[slot_index+j] += 1
+        print 'alloced stack: ' + str(stack_loc.bp_offset)
         return stack_loc
 
-    def dealloc_stack(self, stack_address, size):
-        self.stack_slots[stack_address:stack_address+size] = [None] * size
+    def free_stack(self, stack_address, size):
+        print 'freeing %d stack slots at %d' % (size, stack_address)
+        for j in range(size):
+            self.stack_slots[stack_address + j] -= 1
+        while self.stack_slots[-1] == 0:
+            self.stack_slots = self.stack_slots[:-1]
+            print 'stack spill heap has shrunken'
+
+    def free_local(self, local):
+        print 'local %s is now dead' % (local,)
+        size = ABI.sizeof(local.type)
+        for location in self.address_desc[local]:
+            if type(location) == StackLocation:
+                stack_address = location.bp_offset
+                self.free_stack(stack_address, size)
+            elif type(location) == RegisterLocation:
+                self.register_desc[location.reg].remove(local)
+                print 'reg %s is no longer storing %s' % (location.reg, local)
+        del self.address_desc[local]
 
     def spill_reg(self, reg):
         """
@@ -202,16 +221,6 @@ class RegisterAllocator(object):
         self.address_desc[local].add(reg)
         self.register_desc[reg.reg].add(local)
         print '%s is now stored in %s' % (local,reg.reg)
-
-    def free_reg(self, reg, local):
-        """
-        Updates metadata to reflect that 'local' is no longer stored in 'reg'.
-        """
-        assert type(reg) == RegisterLocation
-        assert type(local) == il.Variable
-        self.register_desc[reg.reg].remove(local)
-        self.address_desc[local].remove(reg)
-        print 'reg %s is no longer storing %s' % (reg.reg, local)
 
     def add_global(self, global_name, memory_loc):
         assert type(global_name) == il.GlobalName
@@ -551,6 +560,9 @@ class LC3(object):
         self.emit_func_epilogue()
 
     def emit_basic_block(self, bb, liveness, reg_alloc):
+        def liveness_set_to_str(live):
+            return '(' + ', '.join(map(lambda v: v.name, live)) + ')'
+
         # statement-level live-out sets
         stmt_liveness = [set() for _ in range(len(bb.stmts))]
         stmt_liveness[-1].update(liveness.live_out(bb))
@@ -562,7 +574,9 @@ class LC3(object):
 
         for i, stmt in enumerate(bb.stmts):
             live_out = stmt_liveness[i]
-            print 'SCHEDULING ' + str(stmt)
+            print '\nSCHEDULING ' + str(stmt)
+            print 'Live out: ' + liveness_set_to_str(live_out)
+            self.emit_comment(str(stmt))
 
             # Register scheduling
             dst_local = il.defed_var(stmt)
@@ -577,17 +591,16 @@ class LC3(object):
                 elif type(b_loc) == RegisterLocation:
                     if dst_reg != b_loc.reg:
                         self.cl_move(dst_reg, b_loc.reg)
-                        if b_local not in live_out:
-                            print 'free1'
-                            reg_alloc.free_reg(b_loc, b_local)
                 elif type(b_loc) == MemoryLocation:
                     self.reloc_load_address(dst_reg, b_loc.name)
                 else:
                     assert False
+                if b_local not in live_out:
+                    reg_alloc.free_local(b_local)
             else:
                 dst_reg = reg_alloc.getreg(live_out, None, None)
 
-            if dst_local:
+            if dst_local and dst_local in live_out:
                 reg_alloc.store_reg(RegisterLocation(dst_reg), dst_local)
 
             if len(src_locals) > 1:
@@ -596,20 +609,17 @@ class LC3(object):
                 if type(c_loc) == StackLocation:
                     c_reg = reg_alloc.getreg(live_out, None, dst_reg)
                     self.vl_load_local(c_reg, c_loc.bp_offset)
-                    if c_local in live_out:
-                        reg_alloc.store_reg(c_reg, c_local)
                 elif type(c_loc) == RegisterLocation:
                     c_reg = c_loc.reg
-                    if c_local not in live_out:
-                        print 'free2'
-                        reg_alloc.free_reg(c_loc, c_local)
                 elif type(c_loc) == MemoryLocation:
                     c_reg = reg_alloc.getreg(live_out, None, dst_reg)
                     self.reloc_load_address(c_reg, c_loc.name)
-                    if c_local in live_out:
-                        reg_alloc.store_reg(c_reg, c_local)
                 else:
                     assert False
+                if c_local in live_out:
+                    reg_alloc.store_reg(RegisterLocation(c_reg), c_local)
+                else:
+                    reg_alloc.free_local(c_local)
             else:
                 c_reg = None
 
@@ -620,8 +630,8 @@ class LC3(object):
                 dst_local = reg_alloc
             elif typ == il.UnaryStmt:
                 if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
-                    print 'MOVE detected'
-                    reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src)
+                    if dst_local in live_out:
+                        reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src) # THIS MOVE HAS SPECIAL SEMANTIC
 
 
     def emit_func_prologue(self, locals_size):

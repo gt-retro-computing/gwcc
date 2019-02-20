@@ -33,6 +33,7 @@ int cock;
     char z = 5;
     z;
     int* ptr = 5;
+    int hottestMeme;
     {
     int zozzle = *ptr;
     z++;
@@ -43,6 +44,7 @@ int cock;
     ptr += 777;
     int lol = *ptr += 0x888;
     z = (x = y);
+    hottestMeme=lolz+lol+zozzle;
     }
     if (1) while (1) {
     continue;
@@ -58,7 +60,7 @@ int cock;
         y = 5;
         *ptr = 3;
     }
-    return y*(x+z);
+    return y*(x+z)+hottestMeme+wowza;
 //    return 0;
 }
 
