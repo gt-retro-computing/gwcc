@@ -371,14 +371,11 @@ class Frontend(object):
         pragma = node.string
         parts = pragma.split(' ')
         if parts[0] == 'location':
-            if parts[1] == 'pop':
-                self.cur_pragma_loc = 0
-            else:
-                try:
-                    loc = int(parts[1], 0)
-                except ValueError:
-                    raise SyntaxError('invalid pragma location: ' + parts[1])
-                self.cur_pragma_loc = loc
+            try:
+                loc = int(parts[1], 0)
+            except ValueError:
+                raise SyntaxError('invalid pragma location: ' + parts[1])
+            self.cur_pragma_loc = loc
         else:
             sys.stderr.write('warning: ignored pragma ' + pragma + '\n')
 

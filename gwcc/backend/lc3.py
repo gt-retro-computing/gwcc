@@ -436,11 +436,7 @@ class LC3(object):
         if -16 <= value <= 15:
             self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value))
         else:
-            value %= 0x10000
-            while value:
-                self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value & 1))
-                self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
-                value >>= 1
+            return self.cl_load_reg(reg, value)#todo
 
     def reloc_load_address(self, reg, name):
         if self.is_name_mapped(name):
@@ -458,6 +454,15 @@ class LC3(object):
             self.emit_comment('relocated address: ' + label)
             self.make_reloc(self.emit_fill, Relocation.Resolved(label))
 
+    def reloc_call_to(self, label, skip=1):
+        self.emit_insn('LD %s, #%d' % (self.rp, skip))
+        self.emit_insn('JSRR %s' % (self.rp,))
+        if self.is_name_mapped(label):
+            self.emit_fill(self.get_binary_location(label))
+        else:
+            self.emit_comment('relocated address: ' + label)
+            self.make_reloc(self.emit_fill, Relocation.Resolved(label))
+
 
 
 
@@ -466,9 +471,10 @@ class LC3(object):
         """
         Emits a compiler-generated stub to setup the stack and shit
         """
-        self.cl_load_reg(LC3.bp, 0xfeff)
+        self.cl_load_reg(LC3.bp, 0xbfff)
         self.cl_move(LC3.sp, LC3.bp)
-        self.reloc_jump_to('main')
+        self.reloc_call_to('main', 2)
+        self.emit_insn('HALT')
 
     def emit_global_variable(self, glob):
         self.place_relocation(glob.name)
@@ -602,6 +608,7 @@ class LC3(object):
                     self.cl_move(dst_reg, src_loc.reg)
             elif type(src_loc) == MemoryLocation:
                 self.reloc_load_address(dst_reg, src_loc.name)
+                self.emit_insn('LDR %s, %s, #0' % (dst_reg, dst_reg))
             else:
                 assert False
 
@@ -702,8 +709,8 @@ class LC3(object):
 
     def emit_global_name(self, global_name):
         if global_name.location > 0:
-            if global_name.location < 0x3000 or global_name.location > 0xFEFF:
-                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xFEFF' % (global_name.location,))
+            if global_name.location < 0x3000 or global_name.location > 0xbfff:
+                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xbfff' % (global_name.location,))
             self.emit_section_end()
             self.emit_orig(global_name.location)
             self._cur_binary_loc = global_name.location
