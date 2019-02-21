@@ -22,7 +22,11 @@ int value3 = 69;
 
 #pragma location 0x3100
 int main() {
-    return 5+value3;
+    if (1==5) {
+        return 5+value3;
+    } else {
+        return 0;
+    }
 }
 
 //int main(int argc, char** argv) {

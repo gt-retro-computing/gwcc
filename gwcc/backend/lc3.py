@@ -445,18 +445,8 @@ class LC3(object):
             self.emit_comment('relocated load: %s <- %s' % (reg, name))
             self.make_reloc(self.cl_load_reg, reg, Relocation.Resolved(name))
 
-    def reloc_jump_to(self, label):
-        self.emit_insn('LD %s, #1' % (self.rp,))
-        self.emit_insn('jmp %s' % (self.rp,))
-        if self.is_name_mapped(label):
-            self.emit_fill(self.get_binary_location(label))
-        else:
-            self.emit_comment('relocated address: ' + label)
-            self.make_reloc(self.emit_fill, Relocation.Resolved(label))
 
-    def reloc_call_to(self, label, skip=1):
-        self.emit_insn('LD %s, #%d' % (self.rp, skip))
-        self.emit_insn('JSRR %s' % (self.rp,))
+    def reloc_dump_address(self, label):
         if self.is_name_mapped(label):
             self.emit_fill(self.get_binary_location(label))
         else:
@@ -473,8 +463,10 @@ class LC3(object):
         """
         self.cl_load_reg(LC3.bp, 0xbfff)
         self.cl_move(LC3.sp, LC3.bp)
-        self.reloc_call_to('main', 2)
+        self.emit_insn('LD %s, #2' % (self.rp,))
+        self.emit_insn('JSRR %s' % (self.rp,))
         self.emit_insn('HALT')
+        self.reloc_dump_address('main')
 
     def emit_global_variable(self, glob):
         self.place_relocation(glob.name)
@@ -521,6 +513,9 @@ class LC3(object):
     def vl_store_local(self, src_reg, bp_offset):
         self.emit_comment('mov [bp+%d], %s' % (bp_offset, src_reg))
         self.vl_shift_bp(bp_offset, lambda: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, bp_offset)))
+
+    def name_basic_block(self, fn, bb):
+        return self.mangle_name(fn.name) + '_bb_' + bb.name
 
     def emit_function(self, glob):
         self.place_relocation(glob.name)
@@ -586,6 +581,9 @@ class LC3(object):
         self.emit_func_epilogue()
 
     def emit_basic_block(self, bb, func, liveness, reg_alloc):
+        # place this block's label
+        self.place_relocation(self.name_basic_block(func, bb))
+
         def liveness_set_to_str(live):
             return '(' + ', '.join(map(lambda v: v.name, live)) + ')'
 
@@ -665,8 +663,8 @@ class LC3(object):
                     self.cl_or(dst_reg, c_reg)
                     self.cl_nand(tmp_reg, dst_reg, c_reg)
                     self.emit_insn("AND %s, %s, %s" % (dst_reg, dst_reg, tmp_reg))
-
-
+                else:
+                    raise RuntimeError('unsupported operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
                 if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
                     if dst_local in live_out:
@@ -678,7 +676,46 @@ class LC3(object):
             elif typ == il.ReturnStmt:
                 retvar_loc = reg_alloc.get_loc(func.retval)
                 load_reg_from_loc(self.retval_reg, retvar_loc)
+            elif typ == il.CondJumpStmt:
+                if stmt.imm.value.value != 0:
+                    raise RuntimeError('unsupported (nonzero) comparison constant ' + str(stmt.imm.value.value))
 
+                # set cc flags
+                self.emit_insn('ADD %s, %s, 0' % (dst_reg, dst_reg))
+
+                # load destination pc-relative after the two jumps
+                # layout:
+                # CMP
+                # BR #3
+                # LD tmp, #1
+                # JMP false
+                # false_addr
+                # LD tmp, #1
+                # JMP true
+                # true_addr
+                tmp_reg = reg_alloc.getreg(live_out, None, [dst_reg])
+
+                # true branch insn
+                if stmt.op == il.ComparisonOp.Equ:
+                    self.emit_insn('BRz #3')
+                elif stmt.op == il.ComparisonOp.Neq:
+                    self.emit_insn('BRnp #3')
+                else:
+                    raise RuntimeError('unsupported comparison operator ' + str(stmt.op))
+
+                # false branch load and jump
+                self.emit_insn('LD %s, #1' % (tmp_reg,))
+                self.emit_insn('JMP %s' % (tmp_reg,))
+                false_label = self.name_basic_block(func, stmt.false_block)
+                self.reloc_dump_address(false_label)
+
+                # true branch load and jump
+                self.emit_insn('LD %s, #1' % (tmp_reg,))
+                self.emit_insn('JMP %s' % (tmp_reg,))
+                true_label = self.name_basic_block(func, stmt.true_block)
+                self.reloc_dump_address(true_label)
+            else:
+                raise RuntimeError('unsupported statement ' + str(stmt))
 
 
     def emit_func_prologue(self, locals_size):

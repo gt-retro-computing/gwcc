@@ -30,3 +30,7 @@ if __name__ == '__main__':
     backend.compile()
     print '\n\n\n\n\n'
     print '\n'.join(backend.get_output())
+    with open('out.asm', 'w') as f:
+        f.write('\n'.join(backend.get_output()))
+    import os
+    os.system('scp out.asm vm:hack2/complx/build/complx')
