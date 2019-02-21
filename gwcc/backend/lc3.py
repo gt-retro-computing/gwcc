@@ -104,7 +104,7 @@ class RegisterAllocator(object):
         self.address_desc[local].add(stack_loc)
         for j in range(size):
             self.stack_slots[slot_index+j] += 1
-        print 'alloced stack: ' + str(stack_loc.bp_offset)
+        print '%s is now at %s' % (local, stack_loc)
         return stack_loc
 
     def free_stack(self, stack_address, size):
@@ -118,14 +118,23 @@ class RegisterAllocator(object):
     def free_local(self, local):
         print 'local %s is now dead' % (local,)
         size = ABI.sizeof(local.type)
+        to_remove = set()
         for location in self.address_desc[local]:
-            if type(location) == StackLocation:
-                stack_address = location.bp_offset
-                self.free_stack(stack_address, size)
-            elif type(location) == RegisterLocation:
+            # if type(location) == StackLocation:
+            #     stack_address = location.bp_offset
+            #     self.free_stack(stack_address, size)
+            # elif type(location) == RegisterLocation:
+            if type(location) == RegisterLocation:
                 self.register_desc[location.reg].remove(local)
                 print 'reg %s is no longer storing %s' % (location.reg, local)
-        del self.address_desc[local]
+                to_remove.add(location)
+        # del self.address_desc[local]
+        self.address_desc[local].difference_update(to_remove)
+
+    def free_local_reg(self, local, reg):
+        self.register_desc[reg].remove(local)
+        self.address_desc[local].remove(RegisterLocation(reg))
+
 
     def spill_reg(self, reg):
         """
@@ -135,17 +144,17 @@ class RegisterAllocator(object):
         """
         assert reg in self.register_set
 
-        spill_dst = None
-        size = 0
+        if not self.register_desc[reg]:
+            raise RuntimeError('attempting to spill empty register ' + reg)
+
+        first_local = next(iter(self.register_desc[reg]))
+        spill_dst = self.alloc_stack(first_local)
+        size = ABI.sizeof(first_local)
         # spill all locals stored in this register, if they have not been spilled already.
         for local in self.register_desc[reg]:
             self.address_desc[local].remove(RegisterLocation(reg))
             if not self.has_been_spilled(local):
-                if not spill_dst:
-                    spill_dst = self.alloc_stack(local)
-                    size = ABI.sizeof(local)
-                else:
-                    assert size == ABI.sizeof(local)
+                assert size == ABI.sizeof(local)
                 self.address_desc[local].add(spill_dst)
 
         # this register is now free
@@ -268,6 +277,7 @@ class LC3(object):
         self._mappings = {} # where all the global vars are gettin allocated
         self._deferred_relocations = []
         self._cur_binary_loc = None
+        self._label_cache = {}
 
         # output
         self._compiled = False
@@ -279,7 +289,15 @@ class LC3(object):
         return self._asm
 
     def mangle_name(self, name):
-        return '_' + name
+        if name in self._label_cache:
+            return self._label_cache[name]
+
+        result = '_' + str(len(self._label_cache)) + '_' + name
+        self._label_cache[name] = result
+        return result
+
+    def name_basic_block(self, fn, bb):
+        return self.mangle_name(fn.name + '_' + bb.name)
 
 
 
@@ -402,6 +420,9 @@ class LC3(object):
         self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, src_reg))
         self.cl_twos(src_reg)
 
+    def cl_test(self, src_reg):
+        self.emit_insn('ADD %s, %s, #0' % (src_reg, src_reg))
+
     def cl_nand(self, dst_reg, srcA, srcB):
         self.emit_insn('AND %s, %s, %s' % (dst_reg, srcA, srcB))
         self.cl_ones(dst_reg)
@@ -514,9 +535,6 @@ class LC3(object):
         self.emit_comment('mov [bp+%d], %s' % (bp_offset, src_reg))
         self.vl_shift_bp(bp_offset, lambda: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, bp_offset)))
 
-    def name_basic_block(self, fn, bb):
-        return self.mangle_name(fn.name) + '_bb_' + bb.name
-
     def emit_function(self, glob):
         self.place_relocation(glob.name)
 
@@ -538,7 +556,7 @@ class LC3(object):
 
         for local in func.locals:
             if local not in func.params:
-                local_loc = reg_alloc.alloc_stack(local)
+                reg_alloc.alloc_stack(local)
 
         # function prologue
         self.emit_func_prologue(reg_alloc.cur_bp_offset)
@@ -620,18 +638,20 @@ class LC3(object):
             dst_local = il.defed_var(stmt)
             src_locals = il.used_vars(stmt)
 
-            if len(src_locals) > 0:
-                b_local = src_locals[0]
-                dst_reg = reg_alloc.getreg(live_out, b_local, [])
-                b_loc = reg_alloc.get_loc(b_local)
-                load_reg_from_loc(dst_reg, b_loc)
-                if b_local not in live_out:
-                    reg_alloc.free_local(b_local)
+            if dst_local or src_locals:
+                if len(src_locals) > 0:
+                    b_local = src_locals[0]
+                    dst_reg = reg_alloc.getreg(live_out, b_local, [])
+                    b_loc = reg_alloc.get_loc(b_local)
+                    load_reg_from_loc(dst_reg, b_loc)
+                    if b_local not in live_out:
+                        reg_alloc.free_local(b_local)
+                else:
+                    dst_reg = reg_alloc.getreg(live_out, None, [])
+                if dst_local in live_out:
+                    reg_alloc.store_reg(RegisterLocation(dst_reg), dst_local)
             else:
-                dst_reg = reg_alloc.getreg(live_out, None, [])
-
-            if dst_local and dst_local in live_out:
-                reg_alloc.store_reg(RegisterLocation(dst_reg), dst_local)
+                dst_reg = None
 
             if len(src_locals) > 1:
                 c_local = src_locals[1]
@@ -663,6 +683,15 @@ class LC3(object):
                     self.cl_or(dst_reg, c_reg)
                     self.cl_nand(tmp_reg, dst_reg, c_reg)
                     self.emit_insn("AND %s, %s, %s" % (dst_reg, dst_reg, tmp_reg))
+                elif stmt.op == il.BinaryOp.Lt:
+                    # this is not fucking correct but i'll fix it later
+                    self.cl_sub(dst_reg, c_reg)
+                    self.cl_test(dst_reg)
+                    self.emit_insn('BRn #2')
+                    self.cl_zero_reg(dst_reg)
+                    self.emit_insn('BRnzp #2')
+                    self.cl_zero_reg(dst_reg)
+                    self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
                 else:
                     raise RuntimeError('unsupported operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
@@ -676,12 +705,18 @@ class LC3(object):
             elif typ == il.ReturnStmt:
                 retvar_loc = reg_alloc.get_loc(func.retval)
                 load_reg_from_loc(self.retval_reg, retvar_loc)
+            elif typ == il.GotoStmt:
+                tmp_reg = reg_alloc.getreg(live_out, None, [])
+                self.emit_insn('LD %s, #1' % (tmp_reg,))
+                self.emit_insn('JMP %s' % (tmp_reg,))
+                dst_label = self.name_basic_block(func, stmt.dst_block)
+                self.reloc_dump_address(dst_label)
             elif typ == il.CondJumpStmt:
                 if stmt.imm.value.value != 0:
                     raise RuntimeError('unsupported (nonzero) comparison constant ' + str(stmt.imm.value.value))
 
                 # set cc flags
-                self.emit_insn('ADD %s, %s, 0' % (dst_reg, dst_reg))
+                self.cl_test(dst_reg)
 
                 # load destination pc-relative after the two jumps
                 # layout:
@@ -716,6 +751,11 @@ class LC3(object):
                 self.reloc_dump_address(true_label)
             else:
                 raise RuntimeError('unsupported statement ' + str(stmt))
+
+            if dst_local in func.locals and dst_local in live_out:
+                print 'spilling %s back to stack' % (str(dst_local),)
+                reg_alloc.free_local_reg(dst_local, dst_reg)
+                self.vl_store_local(dst_reg, reg_alloc.get_loc(dst_local).bp_offset)
 
 
     def emit_func_prologue(self, locals_size):

@@ -273,6 +273,8 @@ class Frontend(object):
             return il.BinaryOp.Mul
         elif op == '==':
             return il.BinaryOp.Equ
+        elif op == '<':
+            return il.BinaryOp.Lt
         else:
             raise ValueError('unsupported binary operation ' + op)
 

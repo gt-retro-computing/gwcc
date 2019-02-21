@@ -22,11 +22,14 @@ int value3 = 69;
 
 #pragma location 0x3100
 int main() {
-    if (1==5) {
-        return 5+value3;
-    } else {
-        return 0;
+    int j = 0;
+    int i = 0;
+    while (i < 10)
+    {
+        j += i;
+        i++;
     }
+    return j;
 }
 
 //int main(int argc, char** argv) {
