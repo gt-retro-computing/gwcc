@@ -2,19 +2,22 @@ from pycparser import parse_file, c_parser
 import gwcc
 import platform
 import argparse
+from os import path
 
 def banner():
     print 'The Gangweed Retargetable C Compiler [Version %s]' % (gwcc.__version__,)
     print '(c) 2019 gangweed ganggang. All rights reserved.'
     print
 
-
 if __name__ == '__main__':
     banner()
 
     args_parser = argparse.ArgumentParser()
     args_parser.add_argument('source_file', default='testcases/1.c', nargs='?')
+    args_parser.add_argument('-o', '--output', nargs=1)
     args = args_parser.parse_args()
+    if args.output is None:
+        args.output = path.splitext(path.basename(args.source_file))[0] + '.asm'
 
     parser = c_parser.CParser()
 
@@ -30,7 +33,7 @@ if __name__ == '__main__':
     backend.compile()
     print '\n\n\n\n\n'
     print '\n'.join(backend.get_output())
-    with open('out.asm', 'w') as f:
+    with open(args.output, 'w') as f:
         f.write('\n'.join(backend.get_output()))
     import os
-    os.system('scp out.asm vm:complx')
+    os.system('scp ' + args.output + ' vm:complx')

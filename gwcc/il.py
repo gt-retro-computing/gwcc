@@ -285,11 +285,11 @@ class DerefWriteStmt(object): # basically *x operator
         assert type(src) == Variable
 
         if src.ref_level != ptr.ref_level - 1:
-            raise ValueError('inconsistent reference levels %d and %d' % (src.ref_level, ptr.ref_level))
+            raise SyntaxError('inconsistent reference levels %d and %d' % (src.ref_level, ptr.ref_level))
         if src.ref_level == 0 and src.type != ptr.ref_type:
-            raise ValueError('inconsistent dereferenced type')
+            raise SyntaxError('inconsistent dereferenced type')
         if src.ref_level > 0 and src.ref_type != ptr.ref_type:
-            raise ValueError('inconsistent referenced type')
+            raise SyntaxError('inconsistent referenced type')
 
         self.ptr = ptr
         self.src = src
@@ -305,7 +305,7 @@ class CommentStmt(object):
         self.text = text
 
     def __repr__(self):
-        return self.text
+        return '// ' + self.text
 
 def used_vars(stmt):
     typ = type(stmt)

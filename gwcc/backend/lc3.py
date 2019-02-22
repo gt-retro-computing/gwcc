@@ -1,4 +1,6 @@
 from collections import defaultdict
+
+from gwcc.exceptions import UnsupportedFeatureError
 from ..optimization.dataflow import LivenessAnalysis
 from .. import il
 from .. import cfg
@@ -29,9 +31,9 @@ class StackLocation(object):
 
     def __repr__(self):
         if self.bp_offset >= 0:
-            return '@[bp+%xh]' % (self.bp_offset,)
-        else:
             return '@[bp-%xh]' % (self.bp_offset,)
+        else:
+            return '@[bp+%xh]' % (self.bp_offset,)
 
     def __eq__(self, other):
         return type(other) == StackLocation and other.bp_offset == self.bp_offset
@@ -208,7 +210,9 @@ class RegisterAllocator(object):
             if reg not in no_spill:
                 if all(map(self.has_been_spilled, self.register_desc[reg])):
                     print 'spilling %s, but no copy is required.' % (reg,)
-                    self.spill_reg(reg)
+                    for local in self.register_desc[reg]:
+                        self.address_desc[local].remove(RegisterLocation(reg))
+                    self.register_desc[reg].clear()
                     return reg
 
         # ok, we have to emit a spill copy. but still, avoid spilling src_var.
@@ -279,6 +283,7 @@ class LC3(object):
         self._mappings = {} # where all the global vars are gettin allocated
         self._deferred_relocations = []
         self._cur_binary_loc = None
+        self._cur_orig = None
         self._label_cache = {}
 
         # output
@@ -314,7 +319,7 @@ class LC3(object):
 
     def place_relocation(self, name):
         self.emit_newline()
-        self.emit_comment('symbol: %s' % (name,))
+        self.emit_comment('------- symbol: %s' % (name,) + ' --------')
         self._mappings[name] = self._cur_binary_loc
 
     def is_name_mapped(self, name):
@@ -497,6 +502,7 @@ class LC3(object):
 
     def reloc_load_address(self, reg, name):
         if self.is_name_mapped(name):
+            self.emit_comment('load: ' + name)
             self.cl_load_reg(reg, self.get_binary_location(name))
         else:
             self.emit_comment('relocated load: %s <- %s' % (reg, name))
@@ -505,6 +511,7 @@ class LC3(object):
 
     def reloc_dump_address(self, label):
         if self.is_name_mapped(label):
+            self.emit_comment('address: ' + label)
             self.emit_fill(self.get_binary_location(label))
         else:
             self.emit_comment('relocated address: ' + label)
@@ -532,15 +539,15 @@ class LC3(object):
         init = glob.init
         asm_name = self.mangle_globalname(glob)
 
-        if var.type in [il.Types.char, il.Types.uchar, il.Types.short, il.Types.ushort,
-                        il.Types.int, il.Types.uint]:
-            if init:
-                assert init.type == il.CompiledValueType.Integer
+        if init:
+            if init.type == il.CompiledValueType.Integer:
+                # if var.type in [il.Types.char, il.Types.uchar, il.Types.short, il.Types.ushort,
+                #                 il.Types.int, il.Types.uint]:
                 self.emit_fill(init.value, asm_name)
             else:
-                self.emit_blkw(asm_name, 1)
+                raise RuntimeError('type %s not supported by this backend' % (var.type,))
         else:
-            raise RuntimeError('type %s not supported by this backend' % (var.type,))
+            self.emit_blkw(asm_name, 1)
 
     def vl_shift_bp(self, bp_offset, callback):
         bp_delta = 0 # how much the bp moved, so how much we have to unshift it by
@@ -564,11 +571,11 @@ class LC3(object):
             bp_delta += 15
 
     def vl_load_local(self, dst_reg, bp_offset):
-        self.emit_comment('mov %s, [bp+%d]' % (dst_reg, bp_offset))
+        self.emit_comment('mov %s, [bp-%d]' % (dst_reg, bp_offset))
         self.vl_shift_bp(bp_offset, lambda: self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, bp_offset)))
 
     def vl_store_local(self, src_reg, bp_offset):
-        self.emit_comment('mov [bp+%d], %s' % (bp_offset, src_reg))
+        self.emit_comment('mov [bp-%d], %s' % (bp_offset, src_reg))
         self.vl_shift_bp(bp_offset, lambda: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, bp_offset)))
 
     def emit_function(self, glob):
@@ -588,7 +595,7 @@ class LC3(object):
             reg_alloc.add_global(global_name, MemoryLocation(global_name.name))
 
         for i, param in enumerate(func.params):
-            reg_alloc.address_desc[param].add(StackLocation(i - 6))
+            reg_alloc.address_desc[param].add(StackLocation(-i - 6))
 
         for local in func.locals:
             if local not in func.params:
@@ -620,7 +627,7 @@ class LC3(object):
             label += 'LIVE IN: ' + liveness_set_to_str(liveness.live_in(bb)) + '\\l'
             for i in range(len(bb.stmts)):
                 label += str(bb.stmts[i]) + '\\l'
-                label += '    ' + liveness_set_to_str(stmt_liveness[i]) + '\\l'
+                # label += '    ' + liveness_set_to_str(stmt_liveness[i]) + '\\l'
             label += 'LIVE OUT: ' + liveness_set_to_str(liveness.live_out(bb)) + '\\l'
             print >> fd, "    %s [shape=box, label=\"%s\"]" % (bb.name, label)
         for bb in func.cfg.basic_blocks:
@@ -750,7 +757,7 @@ class LC3(object):
                     self.emit_insn('BRnzp #1')
                     self.cl_zero_reg(dst_reg) # FALSE
                 else:
-                    raise RuntimeError('unsupported binary operation ' + str(stmt.op))
+                    raise UnsupportedFeatureError('unsupported binary operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
                 if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
                     if dst_local in live_out:
@@ -760,7 +767,7 @@ class LC3(object):
                 elif stmt.op == il.UnaryOp.Negate:
                     self.cl_ones(dst_reg)
                 else:
-                    raise RuntimeError('unsupported unary operation ' + str(stmt.op))
+                    raise UnsupportedFeatureError('unsupported unary operation ' + str(stmt.op))
             elif typ == il.ConstantStmt:
                 self.cl_load_reg(dst_reg, stmt.imm.value.value)
 
@@ -798,7 +805,7 @@ class LC3(object):
                 elif stmt.op == il.ComparisonOp.Neq:
                     self.emit_insn('BRnp #3')
                 else:
-                    raise RuntimeError('unsupported comparison operator ' + str(stmt.op))
+                    raise UnsupportedFeatureError('unsupported comparison operator ' + str(stmt.op))
 
                 # false branch load and jump
                 self.emit_insn('LD %s, #1' % (tmp_reg,))
@@ -819,19 +826,31 @@ class LC3(object):
                         pass
                     elif to_type == il.Types.uint:
                         pass
+                    elif to_type == il.Types.ptr:
+                        assert ABI.sizeof(from_type) == 1
+                        pass
                     else:
-                        raise RuntimeError('unsupported cast %s to %s' % (from_type, to_type))
+                        raise UnsupportedFeatureError('unsupported cast %s to %s' % (from_type, to_type))
                 elif from_type == il.Types.uint:
                     if to_type == il.Types.int:
                         pass
                     elif to_type == il.Types.uint:
                         pass
+                    elif to_type == il.Types.ptr:
+                        assert ABI.sizeof(from_type) == 1
+                        pass
                     else:
-                        raise RuntimeError('unsupported cast %s to %s' % (from_type, to_type))
+                        raise UnsupportedFeatureError('unsupported cast %s to %s' % (from_type, to_type))
                 else:
-                    raise RuntimeError('unsupported cast %s to %s' % (from_type, to_type))
+                    raise UnsupportedFeatureError('unsupported cast %s to %s' % (from_type, to_type))
+            elif typ == il.DerefReadStmt:
+                self.emit_insn('LDR %s, %s, #0' % (dst_reg, dst_reg))
+            elif typ == il.DerefWriteStmt:
+                self.emit_insn('STR %s, %s, #0' % (c_reg, dst_reg))
+            elif typ == il.CommentStmt:
+                pass
             else:
-                raise RuntimeError('unsupported statement ' + str(stmt))
+                raise UnsupportedFeatureError('unsupported statement ' + str(stmt))
 
             if dst_local in func.locals and dst_local in live_out:
                 print 'spilling %s back to stack' % (str(dst_local),)
@@ -845,6 +864,7 @@ class LC3(object):
                 self.emit_insn('STR %s, %s, #0' % (dst_reg, tmp_reg))
                 self.emit_insn('BRnzp #1')
                 self.reloc_dump_address(self.mangle_globalname(self._global_vars[dst_local]))
+            self.emit_newline()
 
 
     def emit_func_prologue(self, locals_size):
@@ -874,12 +894,14 @@ class LC3(object):
         self.emit_insn('RET')
 
     def emit_global_name(self, global_name):
-        if global_name.location > 0:
+        if global_name.location > 0 and self._cur_orig != global_name.location:
             if global_name.location < 0x3000 or global_name.location > 0xbfff:
                 raise SyntaxError('pragma location 0x%x not in range 0x3000-0xbfff' % (global_name.location,))
             self.emit_section_end()
+            self.emit_newline()
             self.emit_orig(global_name.location)
             self._cur_binary_loc = global_name.location
+            self._cur_orig = global_name.location
 
         if type(global_name.value) == il.Variable:
             self.emit_global_variable(global_name)
@@ -889,8 +911,6 @@ class LC3(object):
             raise RuntimeError('invalid GlobalName: ' + str(global_name.value))
 
     def compile(self):
-        self._cur_binary_loc = 0x3000
-
         self.emit_comment('This code was compiled with the Gangweed Retargetable C Compiler')
         self.emit_comment('')
         self.emit_comment('')
@@ -898,17 +918,15 @@ class LC3(object):
         # self.emit_comment = lambda comment: None
         # self.emit_newline = lambda: None
 
+        self._cur_binary_loc = 0x3000
+        self._cur_orig = 0x3000
+
         self.emit_orig(self._cur_binary_loc)
         self.emit_stub()
 
         # emit globals then funcs
-        global_vars = filter(lambda name: type(name.value) == il.Variable, self._global_names)
-        for var in global_vars:
-            self.emit_global_name(var)
-
-        functions = filter(lambda name: type(name.value) == il.Function, self._global_names)
-        for func in functions:
-            self.emit_global_name(func)
+        for name in self._global_names:
+            self.emit_global_name(name)
 
         self.emit_section_end()
 

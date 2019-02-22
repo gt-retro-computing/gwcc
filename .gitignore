@@ -3,3 +3,6 @@ venv/
 *.pyc
 
 tmp_*.dot
+*.png
+*.gv
+*.asm

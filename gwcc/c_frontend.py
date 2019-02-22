@@ -7,6 +7,7 @@ import sys
 from pycparser import c_ast
 import il
 import cfg
+from gwcc.exceptions import UnsupportedFeatureError
 from gwcc.optimization.naturalization_pass import NaturalizationPass
 
 class Scope(object):
@@ -79,6 +80,7 @@ class Frontend(object):
         return len(self._scope_stack)
 
     def scope_push(self):
+        SyntaxError
         scope_name = 'local_%s' % (self._scope_cnt,)
         self._scope_cnt += 1
         new_scope = Scope(scope_name, self.current_scope.height + 1, self.current_scope)
@@ -155,7 +157,7 @@ class Frontend(object):
                     if type(node.init) == c_ast.Constant:
                         const_type, init = Frontend.get_constant_value(node.init)
                     else:
-                        raise RuntimeError('global variable initialisers must be constant')
+                        raise UnsupportedFeatureError('global variable initialisers must be constant')
                 self._globals.append(il.GlobalName(node.name, il_var, init, self.cur_pragma_loc, self.cur_pragma_linkage))
             self._c_variables[node] = il_var
             return il_var
@@ -176,10 +178,6 @@ class Frontend(object):
             # handle pointer arithmetic
             if dst.type == il.Types.ptr:
                 assert dst.ref_level > 0
-                ptr_size = self.target_arch.sizeof(dst.ref_type)
-                if ptr_size > 1:
-                    const_var = self.on_constant(src.type, Frontend.make_int_constant(ptr_size))
-                    src = self.on_binary_op(src, const_var, il.BinaryOp.Mul)
             return il.CastStmt(dst, src)
         else:
             assert dst.ref_level == src.ref_level
@@ -289,7 +287,7 @@ class Frontend(object):
         elif op == '|':
             return il.BinaryOp.Or
         else:
-            raise ValueError('unsupported binary operation ' + op)
+            raise UnsupportedFeatureError('unsupported binary operation ' + op)
 
     def on_binary_op(self, srcA, srcB, il_op):
         assert type(srcA) == il.Variable
@@ -472,7 +470,7 @@ class Frontend(object):
         if node.type == 'int':
             return il.Types.int, Frontend.make_int_constant(int(node.value, 0))
         else:
-            raise RuntimeError('unsupported constant type ' + node.type)
+            raise UnsupportedFeatureError('unsupported constant type ' + node.type)
 
     def on_postincrement_node(self, expr_node):
         expr_var = self.on_expr_node(expr_node) # lol, this will result in a blatant common subexpression
@@ -529,7 +527,7 @@ class Frontend(object):
         elif op == '~':
             return il.UnaryOp.Negate
         else:
-            raise RuntimeError('unsupported unary operation ' + op)
+            raise UnsupportedFeatureError('unsupported unary operation ' + op)
 
     def on_id_node(self, node):
         """Resolve an identifier (ID) node into a variable"""
@@ -553,10 +551,14 @@ class Frontend(object):
         elif typ == c_ast.UnaryOp:
             return self.on_unary_op_node(node)
         else:
-            raise RuntimeError("unsupported ast expr node " + str(node))
+            raise UnsupportedFeatureError("unsupported ast expr node " + str(node))
 
     def compile_stmts(self, stmts):
         for node in stmts:
+            if self.cur_func:
+                from pycparser import c_generator
+                generator = c_generator.CGenerator()
+                self.add_stmt(il.CommentStmt(generator.visit(node).split('\n')[0]))
             self.on_stmt_node(node)
 
     def compile(self, ast):
