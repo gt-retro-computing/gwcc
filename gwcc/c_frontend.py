@@ -55,6 +55,7 @@ class Frontend(object):
         self._c_variables = {}
 
         self.cur_pragma_loc = 0
+        self.cur_pragma_linkage = 'C'
 
         self.cur_func = None
         self.cur_block = None
@@ -116,6 +117,8 @@ class Frontend(object):
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.true_block))
             self.cur_func.cfg.add_edge(cfg.FlowEdge(self.cur_block, stmt.false_block))
             self.cur_block = self.cur_func.cfg.new_block()
+        elif type(stmt) == il.ReturnStmt:
+            self.cur_block = self.cur_func.cfg.new_block()
 
     def on_decl_node(self, node):
         """
@@ -153,7 +156,7 @@ class Frontend(object):
                         const_type, init = Frontend.get_constant_value(node.init)
                     else:
                         raise RuntimeError('global variable initialisers must be constant')
-                self._globals.append(il.GlobalName(node.name, il_var, init, self.cur_pragma_loc))
+                self._globals.append(il.GlobalName(node.name, il_var, init, self.cur_pragma_loc, self.cur_pragma_linkage))
             self._c_variables[node] = il_var
             return il_var
 
@@ -205,6 +208,8 @@ class Frontend(object):
 
         # process body
         self.on_compound_node(node.body)
+        self.add_stmt(il.ConstantStmt(self.cur_func.retval, il.Constant(self.make_int_constant(0), self.cur_func.retval.type)))
+        self.add_stmt(il.ReturnStmt()) # in case of missing return
         self.cur_func.verify() # integrity check coz i am stupid
 
         NaturalizationPass(self.cur_func).process()
@@ -275,6 +280,14 @@ class Frontend(object):
             return il.BinaryOp.Equ
         elif op == '<':
             return il.BinaryOp.Lt
+        elif op == '>':
+            return il.BinaryOp.Gt
+        elif op == '&&':
+            return il.BinaryOp.LogicalAnd
+        elif op == '&':
+            return il.BinaryOp.And
+        elif op == '|':
+            return il.BinaryOp.Or
         else:
             raise ValueError('unsupported binary operation ' + op)
 
@@ -378,6 +391,10 @@ class Frontend(object):
             except ValueError:
                 raise SyntaxError('invalid pragma location: ' + parts[1])
             self.cur_pragma_loc = loc
+        elif parts[0] == 'extern':
+            if len(parts) != 2:
+                raise SyntaxError('invalid linkage pragma: ' + node.string)
+            self.cur_pragma_linkage = parts[1]
         else:
             sys.stderr.write('warning: ignored pragma ' + pragma + '\n')
 
@@ -506,9 +523,11 @@ class Frontend(object):
     @staticmethod
     def parse_unary_op(op):
         if op == '!':
-            return il.UnaryOp.Not
+            return il.UnaryOp.LogicalNot
         elif op == '-':
             return il.UnaryOp.Minus
+        elif op == '~':
+            return il.UnaryOp.Negate
         else:
             raise RuntimeError('unsupported unary operation ' + op)
 

@@ -198,8 +198,9 @@ class RegisterAllocator(object):
 
         # 2. failing (1), return an empty register for L if there is one.
         for reg in self.register_set:
-            if not self.register_desc[reg]:
-                return reg
+            if reg not in no_spill:
+                if not self.register_desc[reg]:
+                    return reg
 
         # 3. failing (2), spill some other register variable to memory to make room.
         # prefer register where, for all temporaries currently stored in the register, have been spilled already
@@ -272,6 +273,7 @@ class LC3(object):
 
         # input
         self._global_names = names
+        self._global_vars = {glob.value: glob for glob in self._global_names if type(glob.value) == il.Variable}
 
         # state
         self._mappings = {} # where all the global vars are gettin allocated
@@ -288,7 +290,15 @@ class LC3(object):
             raise RuntimeError('input has not been compiled')
         return self._asm
 
-    def mangle_name(self, name):
+    def mangle_globalname(self, global_name):
+        if global_name.linkage == 'C':
+            return self.mangle_name_c(global_name.name)
+        elif global_name.linkage == 'asm':
+            return global_name.name
+        else:
+            raise SyntaxError('unsupported linkage declaration ' + global_name.linkage)
+
+    def mangle_name_c(self, name):
         if name in self._label_cache:
             return self._label_cache[name]
 
@@ -297,7 +307,7 @@ class LC3(object):
         return result
 
     def name_basic_block(self, fn, bb):
-        return self.mangle_name(fn.name + '_' + bb.name)
+        return self.mangle_name_c(fn.name + '_' + bb.name)
 
 
 
@@ -434,7 +444,6 @@ class LC3(object):
         self.cl_nand(dst_reg, dst_reg, src_reg)
         self.cl_ones(src_reg)
 
-
     def cl_load_reg(self, reg, value):
         self.cl_zero_reg(reg)
         self.emit_insn('LD %s, #1' % (reg,))
@@ -451,6 +460,39 @@ class LC3(object):
         for bit in range(15, -1, -1):
             self.emit_insn('add %s, %s, %s' % (reg, reg, reg))
             self.emit_insn('add %s, %s, #%d' % (reg, reg, (value >> bit) & 1))
+
+    def cl_lt_unsigned(self, dst_reg, src_reg): # dst_reg = dst_reg < src_reg
+        self.cl_test(dst_reg)
+        self.emit_insn('BRn #3')  # branch to A_NEGATIVE
+        self.cl_test(src_reg)  # A_NONNEGATIVE
+        self.emit_insn('BRn #12')  # if b negative, branch to TRUE
+        self.emit_insn('BRnzp #2')  # jump to COMPARE
+        self.cl_test(src_reg)  # A_NEGATIVE
+        self.emit_insn('BRzp #9')  # if b non-negative, branch to FALSE
+        self.cl_sub(dst_reg, src_reg)  # COMPARE: (THIS IS 5 INSTRUCTIONS.)
+        self.cl_test(dst_reg)
+        self.emit_insn('BRn #2')  # branch to TRUE
+        self.cl_zero_reg(dst_reg)  # FALSE:
+        self.emit_insn('BRnzp #2')  # jump to END:
+        self.cl_zero_reg(dst_reg)  # TRUE:
+        self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
+
+    def cl_lt_signed(self, dst_reg, src_reg): # dst_reg = dst_reg < src_reg
+        self.cl_test(dst_reg)
+        self.emit_insn('BRn #3')  # branch to A_NEGATIVE
+        self.cl_test(src_reg)  # A_NONNEGATIVE
+        self.emit_insn('BRn #10')  # branch to FALSE
+        self.emit_insn('BRnzp #2')  # jump to COMPARE
+        self.cl_test(src_reg)  # A_NEGATIVE
+        self.emit_insn('BRzp #9')  # if b non-negative, branch to TRUE
+        self.cl_sub(dst_reg, src_reg)  # COMPARE: (THIS IS 5 INSTRUCTIONS.)
+        self.cl_test(dst_reg)
+        self.emit_insn('BRn #2')  # branch to TRUE
+        self.cl_zero_reg(dst_reg)  # FALSE:
+        self.emit_insn('BRnzp #2')  # jump to END:
+        self.cl_zero_reg(dst_reg)  # TRUE:
+        self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
+        # END:
 
 
     def reloc_load_address(self, reg, name):
@@ -488,7 +530,7 @@ class LC3(object):
 
         var = glob.value
         init = glob.init
-        asm_name = self.mangle_name(glob.name)
+        asm_name = self.mangle_globalname(glob)
 
         if var.type in [il.Types.char, il.Types.uchar, il.Types.short, il.Types.ushort,
                         il.Types.int, il.Types.uint]:
@@ -587,12 +629,13 @@ class LC3(object):
         print >>fd, "}\n"
         fd.close()
 
-        for bb in blocks:
+        for bb in cfg.topoorder(func.cfg):
             self.emit_basic_block(bb, func, liveness, reg_alloc)
 
         self.emit_func_epilogue()
 
     def emit_basic_block(self, bb, func, liveness, reg_alloc):
+        print '\nemitting ' + str(bb)
         # place this block's label
         self.place_relocation(self.name_basic_block(func, bb))
 
@@ -660,6 +703,7 @@ class LC3(object):
                 c_reg = None
 
             print 'dst = %s, operand = %s' % (dst_reg, c_reg if c_reg else 'None')
+            self.emit_comment('    dst = %s, operand = %s' % (dst_reg, c_reg if c_reg else 'None'))
 
             typ = type(stmt)
             if typ == il.BinaryStmt:
@@ -679,31 +723,32 @@ class LC3(object):
                     self.emit_insn("AND %s, %s, %s" % (dst_reg, dst_reg, tmp_reg))
                 elif stmt.op == il.BinaryOp.Lt:
                     if il.Types.is_unsigned(stmt.srcA.type):
-                        self.cl_sub(dst_reg, c_reg)
-                        self.cl_test(dst_reg)
-                        self.emit_insn('BRn #2')
-                        self.cl_zero_reg(dst_reg)
-                        self.emit_insn('BRnzp #2')
-                        self.cl_zero_reg(dst_reg)
-                        self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
+                        self.cl_lt_unsigned(dst_reg, c_reg)
                     else:
-                        self.cl_test(dst_reg)
-                        self.emit_insn('BRn #3') # branch to A_NEGATIVE
-                        self.cl_test(c_reg) # A_NONNEGATIVE
-                        self.emit_insn('BRn #6') # branch to FALSE
-                        self.emit_insn('BRnzp #2') # jump to COMPARE
-                        self.cl_test(c_reg) # A_NEGATIVE
-                        self.emit_insn('BRzp #5') # branch to TRUE
-                        self.cl_sub(dst_reg, c_reg) # COMPARE:
-                        self.cl_test(dst_reg)
-                        self.emit_insn('BRn #2') # branch to TRUE
-                        self.cl_zero_reg(dst_reg) # FALSE:
-                        self.emit_insn('BRnzp #2') # jump to END:
-                        self.cl_zero_reg(dst_reg) # TRUE:
-                        self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
-                        # END:
-
-
+                        self.cl_lt_signed(dst_reg, c_reg)
+                elif stmt.op == il.BinaryOp.Gt:
+                    tmp_reg = reg_alloc.getreg(live_out, None, [dst_reg, c_reg])
+                    print 'tmpreg = ' + tmp_reg
+                    self.cl_move(tmp_reg, dst_reg)
+                    if il.Types.is_unsigned(stmt.srcA.type):
+                        self.cl_lt_unsigned(dst_reg, c_reg)
+                    else:
+                        self.cl_lt_signed(dst_reg, c_reg)
+                    self.cl_ones(dst_reg)
+                    self.emit_insn('AND %s, %s, #1' % (dst_reg, dst_reg))
+                    self.cl_sub(tmp_reg, c_reg)
+                    self.cl_test(tmp_reg)
+                    self.emit_insn('BRnp #1')
+                    self.cl_zero_reg(dst_reg)
+                elif stmt.op == il.BinaryOp.LogicalAnd:
+                    self.cl_test(dst_reg)
+                    self.emit_insn('BRz #5') # brannch to FALSE
+                    self.cl_test(c_reg)
+                    self.emit_insn('BRz #3')
+                    self.cl_zero_reg(dst_reg) # TRUE
+                    self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
+                    self.emit_insn('BRnzp #1')
+                    self.cl_zero_reg(dst_reg) # FALSE
                 else:
                     raise RuntimeError('unsupported binary operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
@@ -712,6 +757,8 @@ class LC3(object):
                         reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src) # THIS MOVE HAS SPECIAL SEMANTIC
                 elif stmt.op == il.UnaryOp.Minus:
                     self.cl_twos(dst_reg)
+                elif stmt.op == il.UnaryOp.Negate:
+                    self.cl_ones(dst_reg)
                 else:
                     raise RuntimeError('unsupported unary operation ' + str(stmt.op))
             elif typ == il.ConstantStmt:
@@ -764,6 +811,25 @@ class LC3(object):
                 self.emit_insn('JMP %s' % (tmp_reg,))
                 true_label = self.name_basic_block(func, stmt.true_block)
                 self.reloc_dump_address(true_label)
+            elif typ == il.CastStmt:
+                from_type = stmt.src.type
+                to_type = stmt.dst.type
+                if from_type == il.Types.int:
+                    if to_type == il.Types.int:
+                        pass
+                    elif to_type == il.Types.uint:
+                        pass
+                    else:
+                        raise RuntimeError('unsupported cast %s to %s' % (from_type, to_type))
+                elif from_type == il.Types.uint:
+                    if to_type == il.Types.int:
+                        pass
+                    elif to_type == il.Types.uint:
+                        pass
+                    else:
+                        raise RuntimeError('unsupported cast %s to %s' % (from_type, to_type))
+                else:
+                    raise RuntimeError('unsupported cast %s to %s' % (from_type, to_type))
             else:
                 raise RuntimeError('unsupported statement ' + str(stmt))
 
@@ -771,6 +837,14 @@ class LC3(object):
                 print 'spilling %s back to stack' % (str(dst_local),)
                 reg_alloc.free_local_reg(dst_local, dst_reg)
                 self.vl_store_local(dst_reg, reg_alloc.get_loc(dst_local).bp_offset)
+
+            if dst_local in self._global_vars:
+                print 'writing %s back to global' % (str(dst_local),)
+                tmp_reg = reg_alloc.getreg(live_out, None, [dst_reg, c_reg])
+                self.emit_insn('LD %s, #2' % (tmp_reg,))
+                self.emit_insn('STR %s, %s, #0' % (dst_reg, tmp_reg))
+                self.emit_insn('BRnzp #1')
+                self.reloc_dump_address(self.mangle_globalname(self._global_vars[dst_local]))
 
 
     def emit_func_prologue(self, locals_size):
@@ -816,6 +890,14 @@ class LC3(object):
 
     def compile(self):
         self._cur_binary_loc = 0x3000
+
+        self.emit_comment('This code was compiled with the Gangweed Retargetable C Compiler')
+        self.emit_comment('')
+        self.emit_comment('')
+        self.emit_newline()
+        # self.emit_comment = lambda comment: None
+        # self.emit_newline = lambda: None
+
         self.emit_orig(self._cur_binary_loc)
         self.emit_stub()
 

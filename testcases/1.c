@@ -1,35 +1,40 @@
 //#pragma location 0x4000
-typedef struct {
-    int a;
-} shit;
-
-#define asdf 234
-
-//#pragma location 0x4000
-
-typedef int uintptr_t;
-
-uintptr_t value;
-
-unsigned lol;
-
-int value3 = 69;
+//typedef struct {
+//    int a;
+//} shit;
+//
+//#define asdf 234
+//
+////#pragma location 0x4000
+//
+//typedef int uintptr_t;
+//
+//uintptr_t value;
+//
+//unsigned lol;
+//
+//int value3 = 69;
 
 //int value4 = (short)6;
 //int foo() {
 //    return 5;
 //}
 
-#pragma location 0x3100
+#pragma extern asm
+unsigned int A = 63090, B = 14233, X = 19253;
+unsigned int ANSWER;
 int main() {
-    int j = 0;
-    int i = -10;
-    while (i < 10)
-    {
-        j += i;
-        i++;
-    }
-    return j;
+    ANSWER = 0;
+    if ((A > X) && (B < X))
+        ANSWER = ~(A & B);
+    else if ((A > X) && (B > X))
+        ANSWER = ~(A | B);
+    else if ((A < X) && (B < X))
+        ANSWER = A | B;
+    else if ((A < X) && (B > X))
+        ANSWER = A & B;
+    else
+        ANSWER = ~A;
 }
 
 //int main(int argc, char** argv) {

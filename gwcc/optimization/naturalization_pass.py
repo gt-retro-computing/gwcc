@@ -70,7 +70,10 @@ class NaturalizationPass(object):
             for bb in cfg.basic_blocks:
                 # kill empty blocks
                 if not bb.stmts:
-                    # print 'killing empty ' + str(bb)
+                    if cfg.get_edges(bb):
+                        raise RuntimeError('empty block has outgoing edges')
+                    elif cfg.get_edges_to(bb):
+                        raise RuntimeError('empty block has incoming edges')
                     cfg.remove_block(bb)
                     break
 

@@ -26,7 +26,7 @@ class Types(Enum):
 
     @staticmethod
     def is_unsigned(typ):
-        return (typ.value % 1 != 0) and typ.value < Types.float.value
+        return (typ.value % 2 != 0) and typ.value < Types.float.value
 
     @staticmethod
     def is_less_than(a, b):
@@ -154,7 +154,7 @@ class BinaryStmt(object):
 
 class UnaryOp(Enum):
     Identity = ''
-    Not = '!'
+    LogicalNot = '!'
     Negate = '~'
     Minus = '-'
 
@@ -451,9 +451,10 @@ class GlobalName(object):
     Represents a value to be allocated somewhere in the binary, such as a
     function, or a global variable.
     """
-    def __init__(self, name, value, init=None, location=0):
+    def __init__(self, name, value, init=None, location=0, linkage='C'):
         assert init is None or type(init) == CompiledValue
         self.name = name
         self.value = value
         self.init = init
         self.location = location
+        self.linkage = linkage

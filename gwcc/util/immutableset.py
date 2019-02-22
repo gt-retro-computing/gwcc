@@ -12,7 +12,7 @@ class ImmutableSet(object):
         return self._data.__iter__()
 
     def __nonzero__(self):
-        return self._data.__nonzero__()
+        return len(self._data) != 0
 
     def __str__(self):
         return self._data.__str__()
