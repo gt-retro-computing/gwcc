@@ -314,6 +314,9 @@ class LC3(object):
     def name_basic_block(self, fn, bb):
         return self.mangle_name_c(fn.name + '_' + bb.name)
 
+    def name_return_block(self, fn):
+        return self.mangle_name_c(fn.name + '_return')
+
 
 
 
@@ -627,7 +630,7 @@ class LC3(object):
             label += 'LIVE IN: ' + liveness_set_to_str(liveness.live_in(bb)) + '\\l'
             for i in range(len(bb.stmts)):
                 label += str(bb.stmts[i]) + '\\l'
-                # label += '    ' + liveness_set_to_str(stmt_liveness[i]) + '\\l'
+                label += '    ' + liveness_set_to_str(stmt_liveness[i]) + '\\l'
             label += 'LIVE OUT: ' + liveness_set_to_str(liveness.live_out(bb)) + '\\l'
             print >> fd, "    %s [shape=box, label=\"%s\"]" % (bb.name, label)
         for bb in func.cfg.basic_blocks:
@@ -639,6 +642,7 @@ class LC3(object):
         for bb in cfg.topoorder(func.cfg):
             self.emit_basic_block(bb, func, liveness, reg_alloc)
 
+        self.place_relocation(self.name_return_block(func))
         self.emit_func_epilogue()
 
     def emit_basic_block(self, bb, func, liveness, reg_alloc):
@@ -774,6 +778,11 @@ class LC3(object):
             elif typ == il.ReturnStmt:
                 retvar_loc = reg_alloc.get_loc(func.retval)
                 load_reg_from_loc(self.retval_reg, retvar_loc)
+                tmp_reg = reg_alloc.getreg(live_out, None, [self.retval_reg])
+                self.emit_insn('LD %s, #1' % (tmp_reg,))
+                self.emit_insn('JMP %s' % (tmp_reg,))
+                self.reloc_dump_address(self.name_return_block(func))
+                reg_alloc.free_local(func.retval)
             elif typ == il.GotoStmt:
                 tmp_reg = reg_alloc.getreg(live_out, None, [])
                 self.emit_insn('LD %s, #1' % (tmp_reg,))

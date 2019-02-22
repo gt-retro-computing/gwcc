@@ -4,11 +4,14 @@ This compiler brought to you by gangweed ganggang
 """
 
 import sys
+
 from pycparser import c_ast
-import il
+
 import cfg
+import il
 from gwcc.exceptions import UnsupportedFeatureError
 from gwcc.optimization.naturalization_pass import NaturalizationPass
+
 
 class Scope(object):
     def __init__(self, name, height = 0, parent=None):
@@ -335,11 +338,18 @@ class Frontend(object):
 
     def on_assign_node(self, node): # assignment EXRESSION
         is_ptr = type(node.lvalue) == c_ast.UnaryOp and node.lvalue.op == '*'
+        is_array = type(node.lvalue) == c_ast.ArrayRef
 
         # lhs should be evaluated first
-        lhs = self.on_expr_node(node.lvalue.expr if is_ptr else node.lvalue)
+        if is_ptr:
+            lhs = self.on_expr_node(node.lvalue.expr)
+        elif is_array:
+            lhs = self.on_array_ref_node_ptr(node.lvalue)
+            is_ptr = True
+        else:
+            lhs = self.on_expr_node(node.lvalue)
         if type(node.lvalue) != c_ast.ID and not is_ptr:
-            raise RuntimeError('unsupported lvalue ' + str(node))
+            raise RuntimeError('unsupported lvalue ' + str(node.lvalue))
 
         # now evaluate rhs
         rhs_value = self.on_expr_node(node.rvalue)
@@ -537,6 +547,19 @@ class Frontend(object):
         il_var = self._c_variables[ast_decl]
         return il_var
 
+    def on_array_ref_node_ptr(self, node):
+        # base
+        base_var = self.on_expr_node(node.name)
+        # subscript
+        subscript_var = self.on_expr_node(node.subscript)
+        ptr_var = self.on_binary_op(base_var, subscript_var, il.BinaryOp.Add)
+        return ptr_var
+
+    def on_array_ref_node(self, node):
+        ptr_var = self.on_array_ref_node_ptr(node)
+        val_var = self.on_dereference(ptr_var)
+        return val_var
+
     # nodes that evaluate. return an ILVariable holding the evaluated value
     def on_expr_node(self, node):
         typ = type(node)
@@ -550,6 +573,8 @@ class Frontend(object):
             return self.on_constant_node(node)
         elif typ == c_ast.UnaryOp:
             return self.on_unary_op_node(node)
+        elif typ == c_ast.ArrayRef:
+            return self.on_array_ref_node(node)
         else:
             raise UnsupportedFeatureError("unsupported ast expr node " + str(node))
 
@@ -601,10 +626,9 @@ class Frontend(object):
         if decl_size:
             if decl_type != 'int':
                 error_specifier(decl_size, decl_type)
-        if not decl_sign:
+        if not decl_sign and decl_type in ['int', 'char']:
             decl_sign = 'signed'
-        else:
-            if decl_type != 'int' and decl_type != 'char':
+        elif decl_sign and decl_type not in ['int', 'char']:
                 error_specifier(decl_sign, decl_type)
 
         return decl_sign, decl_size, decl_type

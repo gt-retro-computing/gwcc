@@ -7,9 +7,9 @@ void main() {
     unsigned x = 0; // 1st index of the array
     unsigned y = LENGTH - 1; // last index of the array
     while (x < y) {
-        int temp = *(ARRAY+x);
-        *(ARRAY+x) = *(ARRAY+y);
-        *(ARRAY+y) = temp;
+        int temp = ARRAY[x];
+        ARRAY[x] = ARRAY[y];
+        ARRAY[y] = temp;
         x++;
         y--;
     }
