@@ -23,7 +23,7 @@ int value3 = 69;
 #pragma location 0x3100
 int main() {
     int j = 0;
-    int i = 0;
+    int i = -10;
     while (i < 10)
     {
         j += i;

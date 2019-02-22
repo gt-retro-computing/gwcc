@@ -397,31 +397,31 @@ class LC3(object):
 
     def cl_twos(self, reg):
         self.cl_ones(reg)
-        self.emit_insn('ADD %s, %s, #1' % (reg, reg))
+        self.emit_insn('add %s, %s, #1' % (reg, reg))
 
     def cl_push(self, src_reg):
         self.emit_comment('push ' + src_reg)
-        self.emit_insn('ADD %s, %s, #-1' % (self.sp, self.sp))
+        self.emit_insn('add %s, %s, #-1' % (self.sp, self.sp))
         self.emit_insn('STR %s, %s, #0' % (src_reg, self.sp))
 
     def cl_pop(self, dst_reg):
         self.emit_comment('pop ' + dst_reg)
         self.emit_insn('LDR %s, %s, #0' % (dst_reg, self.sp))
-        self.emit_insn('ADD %s, %s, #1' % (self.sp, self.sp))
+        self.emit_insn('add %s, %s, #1' % (self.sp, self.sp))
 
     def cl_move(self, dst_reg, src_reg):
         self.emit_comment('mov ' + dst_reg + ', ' + src_reg)
         self.cl_zero_reg(dst_reg)
-        self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, src_reg))
+        self.emit_insn('add %s, %s, %s' % (dst_reg, dst_reg, src_reg))
 
     def cl_sub(self, dst_reg, src_reg):
-        self.emit_comment('sub ' + dst_reg + ', ' + src_reg)
+        # self.emit_comment('sub ' + dst_reg + ', ' + src_reg)
         self.cl_twos(src_reg)
-        self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, src_reg))
+        self.emit_insn('add %s, %s, %s' % (dst_reg, dst_reg, src_reg))
         self.cl_twos(src_reg)
 
     def cl_test(self, src_reg):
-        self.emit_insn('ADD %s, %s, #0' % (src_reg, src_reg))
+        self.emit_insn('add %s, %s, #0' % (src_reg, src_reg))
 
     def cl_nand(self, dst_reg, srcA, srcB):
         self.emit_insn('AND %s, %s, %s' % (dst_reg, srcA, srcB))
@@ -435,8 +435,13 @@ class LC3(object):
         self.cl_ones(src_reg)
 
 
-
     def cl_load_reg(self, reg, value):
+        self.cl_zero_reg(reg)
+        self.emit_insn('LD %s, #1' % (reg,))
+        self.emit_insn('BRnzp #1')
+        self.emit_fill(value)
+
+    def cl_load_reg_funny(self, reg, value):
         """
         Set a register to a 16-bit value using a constant length of code.
         """
@@ -444,24 +449,13 @@ class LC3(object):
         self.cl_zero_reg(reg)
         value %= 0x10000
         for bit in range(15, -1, -1):
-            self.emit_insn('ADD %s, %s, %s' % (reg, reg, reg))
-            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, (value >> bit) & 1))
+            self.emit_insn('add %s, %s, %s' % (reg, reg, reg))
+            self.emit_insn('add %s, %s, #%d' % (reg, reg, (value >> bit) & 1))
 
-
-    def vl_load_reg(self, reg, value):
-        """
-        Set a register to a 16-bit value using a variable length of code.
-        """
-        self.emit_comment('load: %s <- %d (0x%02x)' % (reg, value, value))
-        self.cl_zero_reg(reg)
-        if -16 <= value <= 15:
-            self.emit_insn('ADD %s, %s, #%d' % (reg, reg, value))
-        else:
-            return self.cl_load_reg(reg, value)#todo
 
     def reloc_load_address(self, reg, name):
         if self.is_name_mapped(name):
-            self.vl_load_reg(reg, self.get_binary_location(name))
+            self.cl_load_reg(reg, self.get_binary_location(name))
         else:
             self.emit_comment('relocated load: %s <- %s' % (reg, name))
             self.make_reloc(self.cl_load_reg, reg, Relocation.Resolved(name))
@@ -509,11 +503,11 @@ class LC3(object):
     def vl_shift_bp(self, bp_offset, callback):
         bp_delta = 0 # how much the bp moved, so how much we have to unshift it by
         while bp_offset < -32:
-            self.emit_insn('ADD %s, %s, #-16' % (self.bp, self.bp))
+            self.emit_insn('add %s, %s, #-16' % (self.bp, self.bp))
             bp_offset -= -16
             bp_delta -= 16
         while bp_offset > 31:
-            self.emit_insn('ADD %s, %s, #15' % (self.bp, self.bp))
+            self.emit_insn('add %s, %s, #15' % (self.bp, self.bp))
             bp_offset -= 15
             bp_delta += 15
 
@@ -521,10 +515,10 @@ class LC3(object):
 
         # move bp back
         while bp_delta > 16:
-            self.emit_insn('ADD %s, %s, #-16' % (self.bp, self.bp))
+            self.emit_insn('add %s, %s, #-16' % (self.bp, self.bp))
             bp_delta -= 16
         while bp_delta < -15:
-            self.emit_insn('ADD %s, %s, #15' % (self.bp, self.bp))
+            self.emit_insn('add %s, %s, #15' % (self.bp, self.bp))
             bp_delta += 15
 
     def vl_load_local(self, dst_reg, bp_offset):
@@ -671,7 +665,7 @@ class LC3(object):
             if typ == il.BinaryStmt:
                 dst_local = reg_alloc
                 if stmt.op == il.BinaryOp.Add:
-                    self.emit_insn("ADD %s, %s, %s" % (dst_reg, dst_reg, c_reg))
+                    self.emit_insn("add %s, %s, %s" % (dst_reg, dst_reg, c_reg))
                 elif stmt.op == il.BinaryOp.Sub:
                     self.cl_sub(dst_reg, c_reg)
                 elif stmt.op == il.BinaryOp.And:
@@ -684,23 +678,44 @@ class LC3(object):
                     self.cl_nand(tmp_reg, dst_reg, c_reg)
                     self.emit_insn("AND %s, %s, %s" % (dst_reg, dst_reg, tmp_reg))
                 elif stmt.op == il.BinaryOp.Lt:
-                    # this is not fucking correct but i'll fix it later
-                    self.cl_sub(dst_reg, c_reg)
-                    self.cl_test(dst_reg)
-                    self.emit_insn('BRn #2')
-                    self.cl_zero_reg(dst_reg)
-                    self.emit_insn('BRnzp #2')
-                    self.cl_zero_reg(dst_reg)
-                    self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
+                    if il.Types.is_unsigned(stmt.srcA.type):
+                        self.cl_sub(dst_reg, c_reg)
+                        self.cl_test(dst_reg)
+                        self.emit_insn('BRn #2')
+                        self.cl_zero_reg(dst_reg)
+                        self.emit_insn('BRnzp #2')
+                        self.cl_zero_reg(dst_reg)
+                        self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
+                    else:
+                        self.cl_test(dst_reg)
+                        self.emit_insn('BRn #3') # branch to A_NEGATIVE
+                        self.cl_test(c_reg) # A_NONNEGATIVE
+                        self.emit_insn('BRn #6') # branch to FALSE
+                        self.emit_insn('BRnzp #2') # jump to COMPARE
+                        self.cl_test(c_reg) # A_NEGATIVE
+                        self.emit_insn('BRzp #5') # branch to TRUE
+                        self.cl_sub(dst_reg, c_reg) # COMPARE:
+                        self.cl_test(dst_reg)
+                        self.emit_insn('BRn #2') # branch to TRUE
+                        self.cl_zero_reg(dst_reg) # FALSE:
+                        self.emit_insn('BRnzp #2') # jump to END:
+                        self.cl_zero_reg(dst_reg) # TRUE:
+                        self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
+                        # END:
+
+
                 else:
-                    raise RuntimeError('unsupported operation ' + str(stmt.op))
+                    raise RuntimeError('unsupported binary operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
                 if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
                     if dst_local in live_out:
                         reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src) # THIS MOVE HAS SPECIAL SEMANTIC
-
+                elif stmt.op == il.UnaryOp.Minus:
+                    self.cl_twos(dst_reg)
+                else:
+                    raise RuntimeError('unsupported unary operation ' + str(stmt.op))
             elif typ == il.ConstantStmt:
-                self.vl_load_reg(dst_reg, stmt.imm.value.value)
+                self.cl_load_reg(dst_reg, stmt.imm.value.value)
 
             elif typ == il.ReturnStmt:
                 retvar_loc = reg_alloc.get_loc(func.retval)
@@ -769,9 +784,9 @@ class LC3(object):
 
         self.emit_comment('sub sp, %d' % (locals_size,))
         while locals_size > 16:
-            self.emit_insn('ADD %s, %s, #-16' % (self.bp, self.bp))
+            self.emit_insn('add %s, %s, #-16' % (self.bp, self.bp))
             locals_size -= 16
-        self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, locals_size))
+        self.emit_insn('add %s, %s, #-%d' % (self.sp, self.sp, locals_size))
 
     def emit_func_epilogue(self):
         self.emit_comment('leave')

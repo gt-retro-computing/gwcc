@@ -507,6 +507,8 @@ class Frontend(object):
     def parse_unary_op(op):
         if op == '!':
             return il.UnaryOp.Not
+        elif op == '-':
+            return il.UnaryOp.Minus
         else:
             raise RuntimeError('unsupported unary operation ' + op)
 
