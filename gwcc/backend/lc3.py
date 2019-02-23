@@ -91,7 +91,7 @@ class RegisterAllocator(object):
     def alloc_stack(self, local):
         assert type(local) == il.Variable
         size = ABI.sizeof(local.type)
-        for i in range(len(self.stack_slots)-size):
+        for i in range(len(self.stack_slots)+1-size):
             for j in range(size):
                 if self.stack_slots[i+j] != 0:
                     break
@@ -100,7 +100,7 @@ class RegisterAllocator(object):
                 break
         else:
             slot_index = len(self.stack_slots)
-            self.stack_slots.extend([1] * size)
+            self.stack_slots.extend([0] * size)
 
         stack_loc = StackLocation(slot_index)
         self.address_desc[local].add(stack_loc)
@@ -220,7 +220,7 @@ class RegisterAllocator(object):
             if reg not in no_spill:
                 if self.register_desc[reg]:
                     spill_dst = self.spill_reg(reg)
-                    print 'spilling %s to %s' % (reg, spill_dst)
+                    print 'spilling contents of %s to %s' % (reg, spill_dst)
                     self.spill_callback(spill_dst, reg)
                     return reg
 
@@ -417,6 +417,10 @@ class LC3(object):
         self.cl_ones(reg)
         self.emit_insn('add %s, %s, #1' % (reg, reg))
 
+    def cl_logical_not(self, reg):
+        self.cl_ones(reg)
+        self.emit_insn('AND %s, %s, #1' % (reg, reg))
+
     def cl_push(self, src_reg):
         self.emit_comment('push ' + src_reg)
         self.emit_insn('add %s, %s, #-1' % (self.sp, self.sp))
@@ -469,6 +473,15 @@ class LC3(object):
             self.emit_insn('add %s, %s, %s' % (reg, reg, reg))
             self.emit_insn('add %s, %s, #%d' % (reg, reg, (value >> bit) & 1))
 
+    def cl_eq(self, dst_reg, src_reg):
+        self.cl_sub(dst_reg, src_reg)
+        self.cl_test(dst_reg)
+        self.emit_insn('BRz #2')  # branch to TRUE
+        self.cl_zero_reg(dst_reg)
+        self.emit_insn('BRnzp #2')  # branch over TRUE
+        self.cl_zero_reg(dst_reg)
+        self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
+
     def cl_lt_unsigned(self, dst_reg, src_reg): # dst_reg = dst_reg < src_reg
         self.cl_test(dst_reg)
         self.emit_insn('BRn #3')  # branch to A_NEGATIVE
@@ -512,13 +525,13 @@ class LC3(object):
             self.make_reloc(self.cl_load_reg, reg, Relocation.Resolved(name))
 
 
-    def reloc_dump_address(self, label):
-        if self.is_name_mapped(label):
-            self.emit_comment('address: ' + label)
-            self.emit_fill(self.get_binary_location(label))
+    def reloc_dump_address(self, name, asm_label=''):
+        if self.is_name_mapped(name):
+            self.emit_comment('address: ' + name)
+            self.emit_fill(self.get_binary_location(name), asm_label)
         else:
-            self.emit_comment('relocated address: ' + label)
-            self.make_reloc(self.emit_fill, Relocation.Resolved(label))
+            self.emit_comment('relocated address: ' + name)
+            self.make_reloc(self.emit_fill, Relocation.Resolved(name), asm_label)
 
 
 
@@ -544,11 +557,15 @@ class LC3(object):
 
         if init:
             if init.type == il.CompiledValueType.Integer:
-                # if var.type in [il.Types.char, il.Types.uchar, il.Types.short, il.Types.ushort,
-                #                 il.Types.int, il.Types.uint]:
                 self.emit_fill(init.value, asm_name)
+            elif init.type == il.CompiledValueType.WordArray:
+                self.emit_fill(init.value[0], asm_name)
+                for i in range(1, len(init.value)):
+                    self.emit_fill(init.value[i])
+            elif init.type == il.CompiledValueType.Pointer:
+                self.reloc_dump_address(init.value, asm_name)
             else:
-                raise RuntimeError('type %s not supported by this backend' % (var.type,))
+                raise RuntimeError('type %s not supported by this backend' % (init.type,))
         else:
             self.emit_blkw(asm_name, 1)
 
@@ -563,7 +580,7 @@ class LC3(object):
             bp_offset -= 15
             bp_delta += 15
 
-        callback()
+        callback(bp_offset)
 
         # move bp back
         while bp_delta > 16:
@@ -572,14 +589,16 @@ class LC3(object):
         while bp_delta < -15:
             self.emit_insn('add %s, %s, #15' % (self.bp, self.bp))
             bp_delta += 15
+        if bp_delta:
+            self.emit_insn('add %s, %s, #-%d' % (self.bp, self.bp, bp_delta))
 
     def vl_load_local(self, dst_reg, bp_offset):
         self.emit_comment('mov %s, [bp-%d]' % (dst_reg, bp_offset))
-        self.vl_shift_bp(bp_offset, lambda: self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, bp_offset)))
+        self.vl_shift_bp(bp_offset, lambda offset: self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, offset)))
 
     def vl_store_local(self, src_reg, bp_offset):
         self.emit_comment('mov [bp-%d], %s' % (bp_offset, src_reg))
-        self.vl_shift_bp(bp_offset, lambda: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, bp_offset)))
+        self.vl_shift_bp(bp_offset, lambda offset: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, offset)))
 
     def emit_function(self, glob):
         self.place_relocation(glob.name)
@@ -665,6 +684,7 @@ class LC3(object):
                 stmt_liveness[i - 1].add(func.retval)
 
         def load_reg_from_loc(dst_reg, src_loc):
+            print 'loading %s from %s' % (dst_reg, src_loc)
             if type(src_loc) == StackLocation:
                 self.vl_load_local(dst_reg, src_loc.bp_offset)
             elif type(src_loc) == RegisterLocation:
@@ -745,26 +765,39 @@ class LC3(object):
                         self.cl_lt_unsigned(dst_reg, c_reg)
                     else:
                         self.cl_lt_signed(dst_reg, c_reg)
-                    self.cl_ones(dst_reg)
-                    self.emit_insn('AND %s, %s, #1' % (dst_reg, dst_reg))
+                    self.cl_logical_not(dst_reg)
                     self.cl_sub(tmp_reg, c_reg)
                     self.cl_test(tmp_reg)
                     self.emit_insn('BRnp #1')
                     self.cl_zero_reg(dst_reg)
                 elif stmt.op == il.BinaryOp.LogicalAnd:
                     self.cl_test(dst_reg)
-                    self.emit_insn('BRz #5') # brannch to FALSE
+                    self.emit_insn('BRz #5') # branch to FALSE
                     self.cl_test(c_reg)
                     self.emit_insn('BRz #3')
                     self.cl_zero_reg(dst_reg) # TRUE
                     self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
                     self.emit_insn('BRnzp #1')
                     self.cl_zero_reg(dst_reg) # FALSE
+                elif stmt.op == il.BinaryOp.LogicalOr:
+                    self.cl_test(dst_reg)
+                    self.emit_insn('BRnp #2') # branch to TRUE
+                    self.cl_test(c_reg)
+                    self.emit_insn('BRz #3') # branch to FALSE
+                    self.cl_zero_reg(dst_reg) # TRUE
+                    self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
+                    self.emit_insn('BRnzp #1')
+                    self.cl_zero_reg(dst_reg) # FALSE
+                elif stmt.op == il.BinaryOp.Equ:
+                    self.cl_eq(dst_reg, c_reg)
+                elif stmt.op == il.BinaryOp.Neq:
+                    self.cl_eq(dst_reg, c_reg)
+                    self.cl_logical_not(dst_reg)
                 else:
                     raise UnsupportedFeatureError('unsupported binary operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
                 if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
-                    if dst_local in live_out:
+                    if dst_local in live_out and stmt.src not in func.locals:
                         reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src) # THIS MOVE HAS SPECIAL SEMANTIC
                 elif stmt.op == il.UnaryOp.Minus:
                     self.cl_twos(dst_reg)
@@ -830,26 +863,8 @@ class LC3(object):
             elif typ == il.CastStmt:
                 from_type = stmt.src.type
                 to_type = stmt.dst.type
-                if from_type == il.Types.int:
-                    if to_type == il.Types.int:
-                        pass
-                    elif to_type == il.Types.uint:
-                        pass
-                    elif to_type == il.Types.ptr:
-                        assert ABI.sizeof(from_type) == 1
-                        pass
-                    else:
-                        raise UnsupportedFeatureError('unsupported cast %s to %s' % (from_type, to_type))
-                elif from_type == il.Types.uint:
-                    if to_type == il.Types.int:
-                        pass
-                    elif to_type == il.Types.uint:
-                        pass
-                    elif to_type == il.Types.ptr:
-                        assert ABI.sizeof(from_type) == 1
-                        pass
-                    else:
-                        raise UnsupportedFeatureError('unsupported cast %s to %s' % (from_type, to_type))
+                if ABI.sizeof(from_type) == ABI.sizeof(to_type):
+                    pass
                 else:
                     raise UnsupportedFeatureError('unsupported cast %s to %s' % (from_type, to_type))
             elif typ == il.DerefReadStmt:

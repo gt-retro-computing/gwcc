@@ -158,7 +158,15 @@ class Frontend(object):
                 init = None
                 if node.init:
                     if type(node.init) == c_ast.Constant:
-                        const_type, init = Frontend.get_constant_value(node.init)
+                        const_type, init = self.get_constant_value(node.init)
+                    elif type(node.init) == c_ast.ID:
+                        id_var = self.on_id_node(node.init)
+                        for glob in self._globals:
+                            if glob.name == node.init.name:
+                                init = glob.init
+                                break
+                        else:
+                            raise RuntimeError("couldn't find initialiser for referenced global " + node.init.name)
                     else:
                         raise UnsupportedFeatureError('global variable initialisers must be constant')
                 self._globals.append(il.GlobalName(node.name, il_var, init, self.cur_pragma_loc, self.cur_pragma_linkage))
@@ -178,7 +186,6 @@ class Frontend(object):
         assert type(src) == il.Variable
 
         if dst.type != src.type:
-            # handle pointer arithmetic
             if dst.type == il.Types.ptr:
                 assert dst.ref_level > 0
             return il.CastStmt(dst, src)
@@ -279,12 +286,16 @@ class Frontend(object):
             return il.BinaryOp.Mul
         elif op == '==':
             return il.BinaryOp.Equ
+        elif op == '!=':
+            return il.BinaryOp.Neq
         elif op == '<':
             return il.BinaryOp.Lt
         elif op == '>':
             return il.BinaryOp.Gt
         elif op == '&&':
             return il.BinaryOp.LogicalAnd
+        elif op == '||':
+            return il.BinaryOp.LogicalOr
         elif op == '&':
             return il.BinaryOp.And
         elif op == '|':
@@ -467,7 +478,7 @@ class Frontend(object):
         return il_var
 
     def on_constant_node(self, node):
-        const_type, value = Frontend.get_constant_value(node)
+        const_type, value = self.get_constant_value(node)
         return self.on_constant(const_type, value)
 
 
@@ -476,16 +487,36 @@ class Frontend(object):
         return il.CompiledValue(value, il.CompiledValueType.Integer)
 
     @staticmethod
-    def get_constant_value(node):
+    def make_pointer_constant(value):
+        return il.CompiledValue(value, il.CompiledValueType.Pointer)
+
+    def get_constant_value(self, node):
         if node.type == 'int':
             return il.Types.int, Frontend.make_int_constant(int(node.value, 0))
+        elif node.type == 'string':
+            assert type(node.value) == str
+            if node.value[0] != '"' or node.value[-1] != '"':
+                raise SyntaxError('invalid char constant ' + node.value)
+            str_value = node.value[1:-1] + '\0'
+            value_escaped = ''.join(c for c in str_value if c.isalnum())
+            var_name = '__A_' + value_escaped
+            il_var = il.Variable(var_name, il.Types.char)
+            string_init = il.CompiledValue(map(ord, str_value), il.CompiledValueType.WordArray)
+            self._globals.append(il.GlobalName(var_name, il_var, string_init, self.cur_pragma_loc, self.cur_pragma_linkage))
+            return il.Types.ptr, Frontend.make_pointer_constant(var_name)
+        elif node.type == 'char':
+            if node.value[0] != "'" or node.value[-1] != "'":
+                raise SyntaxError('invalid char constant ' + node.value)
+            return il.Types.char, Frontend.make_int_constant(ord(str(node.value[1:-1]).decode('string-escape')))
         else:
             raise UnsupportedFeatureError('unsupported constant type ' + node.type)
 
     def on_postincrement_node(self, expr_node):
         expr_var = self.on_expr_node(expr_node) # lol, this will result in a blatant common subexpression
+        tmp_var = self.duplicate_var(expr_var) # this extra copy here is required in case expr_node is a local
+        self.add_stmt(self.on_assign(tmp_var, expr_var))
         self.on_preincrement_node(expr_node)
-        return expr_var
+        return tmp_var
 
     def on_preincrement_node(self, expr_node):
         # this is kinda hacky but w/e
