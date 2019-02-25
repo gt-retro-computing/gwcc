@@ -594,11 +594,16 @@ class LC3(object):
 
     def vl_load_local(self, dst_reg, bp_offset):
         self.emit_comment('mov %s, [bp-%d]' % (dst_reg, bp_offset))
-        self.vl_shift_bp(bp_offset, lambda offset: self.emit_insn('LDR %s, %s, #-%d' % (dst_reg, self.bp, offset)))
+        self.vl_shift_bp(bp_offset, lambda offset: self.emit_insn('LDR %s, %s, #%d' % (dst_reg, self.bp, -offset)))
 
     def vl_store_local(self, src_reg, bp_offset):
         self.emit_comment('mov [bp-%d], %s' % (bp_offset, src_reg))
-        self.vl_shift_bp(bp_offset, lambda offset: self.emit_insn('STR %s, %s, #-%d' % (src_reg, self.bp, offset)))
+        self.vl_shift_bp(bp_offset, lambda offset: self.emit_insn('STR %s, %s, #%d' % (src_reg, self.bp, -offset)))
+
+    def spill_callback(self, spill_loc, src_reg):
+        self.vl_store_local(src_reg, spill_loc.bp_offset)
+        if self.cur_sp < spill_loc.bp_offset:
+            self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, spill_loc.bp_offset - self.cur_sp))
 
     def emit_function(self, glob):
         self.place_relocation(glob.name)
@@ -610,14 +615,14 @@ class LC3(object):
         def liveness_set_to_str(live):
             return '(' + ', '.join(map(lambda v: v.name, live)) + ')'
 
-        spill_callback = lambda spill_loc, src_reg: self.vl_store_local(src_reg, spill_loc.bp_offset)
+        spill_callback = self.spill_callback
         reg_alloc = RegisterAllocator(spill_callback)
 
         for global_name in self._global_names:
             reg_alloc.add_global(global_name, MemoryLocation(global_name.name))
 
         for i, param in enumerate(func.params):
-            reg_alloc.address_desc[param].add(StackLocation(-i - 6))
+            reg_alloc.address_desc[param].add(StackLocation(-i - 8))
 
         for local in func.locals:
             if local not in func.params:
@@ -625,6 +630,7 @@ class LC3(object):
 
         # function prologue
         self.emit_func_prologue(reg_alloc.cur_bp_offset)
+        self.cur_sp = reg_alloc.cur_bp_offset
 
         # linearize the cfg
         blocks = cfg.topoorder(func.cfg)
@@ -806,7 +812,14 @@ class LC3(object):
                 else:
                     raise UnsupportedFeatureError('unsupported unary operation ' + str(stmt.op))
             elif typ == il.ConstantStmt:
-                self.cl_load_reg(dst_reg, stmt.imm.value.value)
+                if stmt.imm.value.type == il.CompiledValueType.Integer:
+                    self.cl_load_reg(dst_reg, stmt.imm.value.value)
+                elif stmt.imm.value.type == il.CompiledValueType.Pointer:
+                    self.emit_insn('LD %s, #1' % (dst_reg,))
+                    self.emit_insn('BRnzp #1')
+                    self.reloc_dump_address(stmt.imm.value.value)
+                else:
+                    raise RuntimeError('unsupported compiled constant type')
 
             elif typ == il.ReturnStmt:
                 retvar_loc = reg_alloc.get_loc(func.retval)
@@ -873,6 +886,14 @@ class LC3(object):
                 self.emit_insn('STR %s, %s, #0' % (c_reg, dst_reg))
             elif typ == il.CommentStmt:
                 pass
+            elif typ == il.ParamStmt:
+                self.cl_push(dst_reg)
+            elif typ == il.CallStmt:
+                self.emit_insn('JSRR %s' % (dst_reg,))
+                self.cl_pop(dst_reg)
+                # pop args
+                for i in range(stmt.nargs):
+                    self.emit_insn('add %s, %s, #1' % (self.sp, self.sp))
             else:
                 raise UnsupportedFeatureError('unsupported statement ' + str(stmt))
 
@@ -892,8 +913,10 @@ class LC3(object):
 
 
     def emit_func_prologue(self, locals_size):
+        self.emit_insn('add %s, %s, #-1' % (self.sp, self.sp)) # save space for ret val
         self.cl_push(self.rp)
         self.cl_push(self.bp)
+        self.cl_push('r0')
         self.cl_push('r1')
         self.cl_push('r2')
         self.cl_push('r3')
@@ -909,10 +932,12 @@ class LC3(object):
     def emit_func_epilogue(self):
         self.emit_comment('leave')
         self.cl_move(self.sp, self.bp)
+        self.emit_insn('STR %s, %s, 7' % (self.retval_reg, self.sp))
         self.cl_pop('r4')
         self.cl_pop('r3')
         self.cl_pop('r2')
         self.cl_pop('r1')
+        self.cl_pop('r0')
         self.cl_pop(self.bp)
         self.cl_pop(self.rp)
         self.emit_insn('RET')
@@ -939,8 +964,8 @@ class LC3(object):
         self.emit_comment('')
         self.emit_comment('')
         self.emit_newline()
-        # self.emit_comment = lambda comment: None
-        # self.emit_newline = lambda: None
+        self.emit_comment = lambda comment: None
+        self.emit_newline = lambda: None
 
         self._cur_binary_loc = 0x3000
         self._cur_orig = 0x3000

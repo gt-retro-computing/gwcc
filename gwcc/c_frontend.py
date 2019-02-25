@@ -212,6 +212,8 @@ class Frontend(object):
                 argvars.append(self.on_decl_node(param_decl))
 
         self.cur_func = il.Function(func_decl.name, argvars, retvar)
+        self._globals.append(il.GlobalName(func_decl.name, self.cur_func, None, self.cur_pragma_loc))
+        self._c_variables[func_decl] = self.cur_func
         self.cur_block = self.cur_func.cfg.new_block()
 
         # process body
@@ -222,9 +224,6 @@ class Frontend(object):
 
         NaturalizationPass(self.cur_func).process()
         self.cur_func.verify() # integrity check coz i am stupid
-
-        # store output
-        self._globals.append(il.GlobalName(func_decl.name, self.cur_func, None, self.cur_pragma_loc))
 
         # exit scope
         self.scope_pop(new_scope)
@@ -591,6 +590,32 @@ class Frontend(object):
         val_var = self.on_dereference(ptr_var)
         return val_var
 
+    def on_cast_node(self, node):
+        print node
+        to_type = self.get_node_type(node.to_type.type)
+        if to_type == il.Types.ptr:
+            ref_level, ref_type = self.extract_pointer_type(node.to_type.type)
+        else:
+            ref_level, ref_type = 0, None
+        dst_var = self.cur_func.new_temporary(to_type, ref_level, ref_type)
+        expr_var = self.on_expr_node(node.expr)
+        self.add_stmt(il.CastStmt(dst_var, expr_var))
+        return dst_var
+
+    def on_func_call_node(self, node):
+        num_args = 0
+        for arg in node.args:
+            arg_var = self.on_expr_node(arg)
+            self.add_stmt(il.ParamStmt(arg_var))
+            num_args += 1
+        func_expr = self.on_expr_node(node.name)
+        if type(func_expr) == il.Function:
+            # also FIXME
+            func_expr = self.on_constant(il.Types.ptr, il.CompiledValue(func_expr.name, il.CompiledValueType.Pointer))
+        dst_var = self.cur_func.new_temporary(il.Types.int, 0, None)# hack lol FIXME
+        self.add_stmt(il.CallStmt(dst_var, func_expr, num_args))
+        return dst_var
+
     # nodes that evaluate. return an ILVariable holding the evaluated value
     def on_expr_node(self, node):
         typ = type(node)
@@ -606,6 +631,10 @@ class Frontend(object):
             return self.on_unary_op_node(node)
         elif typ == c_ast.ArrayRef:
             return self.on_array_ref_node(node)
+        elif typ == c_ast.Cast:
+            return self.on_cast_node(node)
+        elif typ == c_ast.FuncCall:
+            return self.on_func_call_node(node)
         else:
             raise UnsupportedFeatureError("unsupported ast expr node " + str(node))
 

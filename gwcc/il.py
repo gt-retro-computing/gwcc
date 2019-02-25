@@ -237,16 +237,16 @@ class ParamStmt(object):
         return 'param %s' % (self.arg,)
 
 class CallStmt(object):
-    def __init__(self, dst, func, nargs):
+    def __init__(self, dst, func_ptr, nargs):
         assert type(dst) == Variable
-        assert type(func) == Function
+        assert type(func_ptr) == Variable
         assert type(nargs) == int
         self.dst = dst
-        self.func = func
+        self.func_ptr = func_ptr
         self.nargs = nargs
 
     def __repr__(self):
-        return '%s = call %s, %d' % (self.dst, self.func.name, self.nargs)
+        return '%s = call %s, %d' % (self.dst, self.func_ptr, self.nargs)
 
 class ReturnStmt(object):
     def __repr__(self):
@@ -324,7 +324,7 @@ def used_vars(stmt):
     elif typ == ParamStmt:
         return [stmt.arg]
     elif typ == CallStmt:
-        return []
+        return [stmt.func_ptr]
     elif typ == ReturnStmt:
         return []
     elif typ == RefStmt:
