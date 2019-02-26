@@ -1,5 +1,6 @@
 from collections import defaultdict
 
+from gwcc.backend.util import BackendError
 from gwcc.exceptions import UnsupportedFeatureError
 from ..optimization.dataflow import LivenessAnalysis
 from .. import il
@@ -302,7 +303,7 @@ class LC3(object):
         elif global_name.linkage == 'asm':
             return global_name.name
         else:
-            raise SyntaxError('unsupported linkage declaration ' + global_name.linkage)
+            raise BackendError('unsupported linkage declaration ' + global_name.linkage)
 
     def mangle_name_c(self, name):
         if name in self._label_cache:
@@ -947,7 +948,7 @@ class LC3(object):
     def emit_global_name(self, global_name):
         if global_name.location > 0 and self._cur_orig != global_name.location:
             if global_name.location < 0x3000 or global_name.location > 0xbfff:
-                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xbfff' % (global_name.location,))
+                raise BackendError('pragma location 0x%x not in range 0x3000-0xbfff' % (global_name.location,))
             self.emit_section_end()
             self.emit_newline()
             self.emit_orig(global_name.location)

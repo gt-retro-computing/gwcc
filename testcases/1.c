@@ -24,6 +24,14 @@
 unsigned int A = 63090, B = 14233, X = 19253;
 unsigned int ANSWER;
 int main() {
+
+    A++;
+    int x = sizeof(long);
+
+    int *y = 5;
+
+    *y = (int)6;
+
     ANSWER = 0;
     if ((A > X) && (B < X))
         ANSWER = ~(A & B);
