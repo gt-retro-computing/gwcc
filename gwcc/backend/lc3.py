@@ -285,6 +285,7 @@ class LC3(object):
         self._cur_binary_loc = None
         self._cur_orig = None
         self._label_cache = {}
+        self._cur_sp = None
 
         # output
         self._compiled = False
@@ -602,8 +603,9 @@ class LC3(object):
 
     def spill_callback(self, spill_loc, src_reg):
         self.vl_store_local(src_reg, spill_loc.bp_offset)
-        if self.cur_sp < spill_loc.bp_offset:
-            self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, spill_loc.bp_offset - self.cur_sp))
+        if self._cur_sp < spill_loc.bp_offset:
+            self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, spill_loc.bp_offset - self._cur_sp))
+            self._cur_sp = spill_loc.bp_offset
 
     def emit_function(self, glob):
         self.place_relocation(glob.name)
@@ -630,7 +632,7 @@ class LC3(object):
 
         # function prologue
         self.emit_func_prologue(reg_alloc.cur_bp_offset)
-        self.cur_sp = reg_alloc.cur_bp_offset
+        self._cur_sp = reg_alloc.cur_bp_offset
 
         # linearize the cfg
         blocks = cfg.topoorder(func.cfg)
