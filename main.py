@@ -49,6 +49,7 @@ if __name__ == '__main__':
     args_parser.add_argument('source_file', default='testcases/1.c', nargs='?')
     args_parser.add_argument('-o', '--output', nargs=1)
     args_parser.add_argument('-g', '--symbols', action='store_true')
+    args_parser.add_argument('--gen-dot', action='store_true')
     args = args_parser.parse_args()
     if args.output is None:
         args.output = path.splitext(path.basename(args.source_file))[0] + '.asm'
@@ -68,15 +69,16 @@ if __name__ == '__main__':
         print_error(e)
         exit(1)
 
-    # for global_var in frontend._globals:
-    #     if type(global_var.value) == il.Function:
-    #         func = global_var.value
-    #         print func.pretty_print()
-    #
-    #         with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
-    #             func.dump_graph(fd=f)
+    if args.gen_dot:
+        for global_var in frontend._globals:
+            if type(global_var.value) == il.Function:
+                func = global_var.value
+                print func.pretty_print()
 
-    backend = gwcc.backend.LC3(frontend.get_globals(), with_symbols=True)
+                with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
+                    func.dump_graph(fd=f)
+
+    backend = gwcc.backend.LC3(frontend.get_globals(), with_symbols=args.symbols)
 
     try:
         backend.compile()
