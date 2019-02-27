@@ -441,9 +441,7 @@ class LC3(object):
         self.emit_insn('add %s, %s, #1' % (self.sp, self.sp))
 
     def cl_move(self, dst_reg, src_reg):
-        self.emit_comment('mov ' + dst_reg + ', ' + src_reg)
-        self.cl_zero_reg(dst_reg)
-        self.emit_insn('add %s, %s, %s' % (dst_reg, dst_reg, src_reg))
+        self.emit_insn('add %s, %s, #0' % (dst_reg, src_reg))
 
     def cl_sub(self, dst_reg, src_reg):
         # self.emit_comment('sub ' + dst_reg + ', ' + src_reg)
@@ -809,6 +807,29 @@ class LC3(object):
                 elif stmt.op == il.BinaryOp.Neq:
                     self.cl_eq(dst_reg, c_reg)
                     self.cl_logical_not(dst_reg)
+                elif stmt.op == il.BinaryOp.Mul:
+                    tmp_mask = reg_alloc.getreg(live_out, None, [dst_reg, c_reg])
+                    tmp_multiplicand = reg_alloc.getreg(live_out, None, [dst_reg, c_reg, tmp_mask])
+                    self.cl_move(tmp_multiplicand, dst_reg)
+                    self.cl_zero_reg(dst_reg)
+                    self.cl_push(c_reg) # save operand value
+                    self.cl_zero_reg(tmp_mask)
+                    self.emit_insn('ADD %s, %s, #1' % (tmp_mask, tmp_mask))
+
+                    for bit in range(0,16):
+                        self.cl_push(tmp_mask) # save mask value
+                        self.emit_insn('AND %s, %s, %s' % (tmp_mask, tmp_mask, tmp_multiplicand))
+                        self.cl_twos(tmp_mask)
+                        self.emit_insn('AND %s, %s, %s' % (tmp_mask, tmp_mask, c_reg)) # mask addend if 0
+                        self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, tmp_mask)) # add
+                        self.cl_pop(tmp_mask) # restore mask
+
+                        # shift left
+                        self.emit_insn('ADD %s, %s, %s' % (tmp_mask, tmp_mask, tmp_mask))
+                        self.emit_insn('ADD %s, %s, %s' % (c_reg, c_reg, c_reg))
+
+                    self.cl_pop(c_reg)
+
                 else:
                     raise UnsupportedFeatureError('unsupported binary operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:

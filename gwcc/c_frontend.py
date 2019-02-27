@@ -299,6 +299,8 @@ class Frontend(object):
             return il.BinaryOp.And
         elif op == '|':
             return il.BinaryOp.Or
+        elif op == '*':
+            return il.BinaryOp.Mul
         else:
             raise UnsupportedFeatureError('unsupported binary operation ' + op)
 
