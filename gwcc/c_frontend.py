@@ -211,7 +211,7 @@ class Frontend(object):
                 argvars.append(self.on_decl_node(param_decl))
 
         self.cur_func = il.Function(func_decl.name, argvars, retvar)
-        self._globals.append(il.GlobalName(func_decl.name, self.cur_func, None, self.cur_pragma_loc))
+        self._globals.append(il.GlobalName(func_decl.name, self.cur_func, None, self.cur_pragma_loc, self.cur_pragma_linkage))
         self._c_variables[func_decl] = self.cur_func
         self.cur_block = self.cur_func.cfg.new_block()
 
@@ -269,13 +269,26 @@ class Frontend(object):
         self.cur_block = self.cur_func.cfg.new_block()
 
     def on_binary_op_node(self, node):
-        srcA = self.on_expr_node(node.left)
-        srcB = self.on_expr_node(node.right)
-        il_op = Frontend.parse_binary_op(node.op)
-        return self.on_binary_op(srcA, srcB, il_op)
+        # Transform >= and <= when used with a constant, to the non-equal variants
+        if type(node.right) == c_ast.Constant and node.op in ('<=', '>='):
+            src_a = self.on_expr_node(node.left)
+            if node.op == '<=':
+                op = '<'
+                src_b = self.on_constant_node(node.right, offset=1)
+            else:  # >=
+                op = '>'
+                src_b = self.on_constant_node(node.right, offset=-1)
+
+            il_op = Frontend.parse_binary_op(op, coord=node.coord)
+            return self.on_binary_op(src_a, src_b, il_op)
+
+        src_a = self.on_expr_node(node.left)
+        src_b = self.on_expr_node(node.right)
+        il_op = Frontend.parse_binary_op(node.op, coord=node.coord)
+        return self.on_binary_op(src_a, src_b, il_op)
 
     @staticmethod
-    def parse_binary_op(op):
+    def parse_binary_op(op, coord=None):
         if op == '+':
             return il.BinaryOp.Add
         elif op == '-':
@@ -299,7 +312,7 @@ class Frontend(object):
         elif op == '|':
             return il.BinaryOp.Or
         else:
-            raise UnsupportedFeatureError('unsupported binary operation ' + op)
+            raise ParseError('unsupported binary operation ' + op, coord=coord)
 
     def on_binary_op(self, srcA, srcB, il_op, coord=None):
         assert type(srcA) == il.Variable
@@ -474,8 +487,8 @@ class Frontend(object):
         self.add_stmt(assign_stmt)
         return il_var
 
-    def on_constant_node(self, node):
-        const_type, value = self.get_constant_value(node)
+    def on_constant_node(self, node, offset=0):
+        const_type, value = self.get_constant_value(node, offset=offset)
         return self.on_constant(const_type, value, coord=node.coord)
 
     @staticmethod
@@ -486,9 +499,9 @@ class Frontend(object):
     def make_pointer_constant(value):
         return il.CompiledValue(value, il.CompiledValueType.Pointer)
 
-    def get_constant_value(self, node):
+    def get_constant_value(self, node, offset=0):
         if node.type == 'int':
-            return il.Types.int, Frontend.make_int_constant(int(node.value, 0))
+            return il.Types.int, Frontend.make_int_constant(int(node.value, 0) + offset)
         elif node.type == 'string':
             assert type(node.value) == str
             if node.value[0] != '"' or node.value[-1] != '"':
