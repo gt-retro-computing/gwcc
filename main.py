@@ -67,16 +67,13 @@ if __name__ == '__main__':
         print_error(e)
         exit(1)
 
-    print frontend.get_globals()[0].value.pretty_print()
-
-    backend = gwcc.backend.LC3(frontend.get_globals())
+    backend = gwcc.backend.LC3(frontend.get_globals(), with_symbols=True)
 
     try:
         backend.compile()
     except BackendError as e:
         print_error(e)
         exit(1)
-
     print '\n\n\n\n\n'
     print '\n'.join(backend.get_output())
     with open(args.output, 'w') as f:

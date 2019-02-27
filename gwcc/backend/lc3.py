@@ -111,23 +111,28 @@ class RegisterAllocator(object):
         return stack_loc
 
     def free_stack(self, stack_address, size):
+        if stack_address < 0: # don't free params
+            return
         print 'freeing %d stack slots at %d' % (size, stack_address)
         for j in range(size):
             self.stack_slots[stack_address + j] -= 1
-        while self.stack_slots[-1] == 0:
+        while self.stack_slots and self.stack_slots[-1] == 0:
             self.stack_slots = self.stack_slots[:-1]
             print 'stack spill heap has shrunken'
 
-    def free_local(self, local):
+    def free_local(self, local, free_stack=True):
         print 'local %s is now dead' % (local,)
         size = ABI.sizeof(local.type)
         to_remove = set()
         for location in self.address_desc[local]:
-            # if type(location) == StackLocation:
-            #     stack_address = location.bp_offset
-            #     self.free_stack(stack_address, size)
-            # elif type(location) == RegisterLocation:
-            if type(location) == RegisterLocation:
+            if type(location) == StackLocation:
+                if not free_stack:
+                    free_stack = True
+                else:
+                    stack_address = location.bp_offset
+                    self.free_stack(stack_address, size)
+            elif type(location) == RegisterLocation:
+            # if type(location) == RegisterLocation:
                 self.register_desc[location.reg].remove(local)
                 print 'reg %s is no longer storing %s' % (location.reg, local)
                 to_remove.add(location)
@@ -273,10 +278,11 @@ class LC3(object):
     rp = 'r7' # return pointer
     retval_reg = 'r0'
 
-    def __init__(self, names):
+    def __init__(self, names, with_symbols=True):
         assert all(map(lambda e: type(e) == il.GlobalName, names))
 
         # input
+        self.enable_symbols = with_symbols
         self._global_names = names
         self._global_vars = {glob.value: glob for glob in self._global_names if type(glob.value) == il.Variable}
 
@@ -380,10 +386,12 @@ class LC3(object):
         self._cur_binary_loc += binary_len
 
     def emit_newline(self):
-        self._asm.append('')
+        if self.enable_symbols:
+            self._asm.append('')
 
     def emit_comment(self, line):
-        self._asm.append('; ' + line)
+        if self.enable_symbols:
+            self._asm.append('; ' + line)
 
     def emit_insn(self, insn):
         self._emit_line(insn, 1)
@@ -604,8 +612,8 @@ class LC3(object):
 
     def spill_callback(self, spill_loc, src_reg):
         self.vl_store_local(src_reg, spill_loc.bp_offset)
-        if self._cur_sp < spill_loc.bp_offset:
-            self.emit_insn('ADD %s, %s, #-%d' % (self.sp, self.sp, spill_loc.bp_offset - self._cur_sp))
+        if self._cur_sp != spill_loc.bp_offset:
+            self.emit_insn('ADD %s, %s, #%d' % (self.sp, self.sp, self._cur_sp - spill_loc.bp_offset))
             self._cur_sp = spill_loc.bp_offset
 
     def emit_function(self, glob):
@@ -722,7 +730,7 @@ class LC3(object):
                     b_loc = reg_alloc.get_loc(b_local)
                     load_reg_from_loc(dst_reg, b_loc)
                     if b_local not in live_out:
-                        reg_alloc.free_local(b_local)
+                        reg_alloc.free_local(b_local, free_stack=b_local not in func.locals)
                 else:
                     dst_reg = reg_alloc.getreg(live_out, None, [])
                 if dst_local in live_out:
@@ -738,7 +746,7 @@ class LC3(object):
                 if c_local in live_out:
                     reg_alloc.store_reg(RegisterLocation(c_reg), c_local)
                 else:
-                    reg_alloc.free_local(c_local)
+                    reg_alloc.free_local(c_local, free_stack=c_local not in func.locals)
             else:
                 c_reg = None
 
@@ -967,8 +975,6 @@ class LC3(object):
         self.emit_comment('')
         self.emit_comment('')
         self.emit_newline()
-        self.emit_comment = lambda comment: None
-        self.emit_newline = lambda: None
 
         self._cur_binary_loc = 0x3000
         self._cur_orig = 0x3000
