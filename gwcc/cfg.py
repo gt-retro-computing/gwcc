@@ -1,3 +1,4 @@
+import platform
 import sys
 from gwcc.util.immutableset import ImmutableSet
 
@@ -123,11 +124,15 @@ def _dot_sanitize(s):
 
 
 def dump_graph(cfg, fd=None, name='CFG'):
+    line_joiner = '\\l'
+    if platform.system() == 'Darwin':
+        line_joiner = '\n'
+
     fd = fd or sys.stdout
     print >>fd, "digraph \"%s\" {" % (_dot_sanitize(name),)
 
     for bb in cfg.basic_blocks:
-        label = _dot_sanitize('\\l'.join(["== Block %s ==" % bb.name] + list(map(str, bb.stmts))))
+        label = _dot_sanitize(line_joiner.join(["== Block %s ==" % bb.name] + list(map(str, bb.stmts))))
         print >>fd, "    %s [shape=box, label=\"%s\"]" % (bb.name, label)
 
     for bb in cfg.basic_blocks:

@@ -5,6 +5,13 @@ A simple 3-address code IL for compiling C code.
 from gwcc.util.enum import Enum
 from cfg import ControlFlowGraph, BasicBlock, topoorder, dump_graph
 
+
+class ParseError(SyntaxError):
+    def __init__(self, message, coord):
+        super(ParseError, self).__init__(message)
+        self.coord = coord
+
+
 class Types(Enum):
     char = 0
     uchar = 1
@@ -46,7 +53,7 @@ class Types(Enum):
         return a.value >= b.value
 
 class Variable(object):
-    def __init__(self, name, typ, ref_level=0, ref_type=None):
+    def __init__(self, name, typ, ref_level=0, ref_type=None, coord=None):
         """
         :param name: variable name
         :param typ: variable type (il.Types instance)
@@ -59,17 +66,32 @@ class Variable(object):
         # tbh, this is a hack for tracking variables at the generation stage, but w/e
         self.ref_level = ref_level
         self.ref_type = ref_type
+        self.coord = coord
 
         if ref_level == 0:
             assert ref_type is None
         else:
             assert ref_type.parent == Types
 
-    def __repr__(self):
-        if self.type == Types.ptr:
-            return '%s%s.%s' % (self.ref_type, '*' * self.ref_level, self.name)
+    def pretty_print(self):
+        return repr(self)
+
+    @property
+    def deref_type(self):
+        if self.type == Types.ptr and self.ref_level > 0:
+            return str(self.ref_type) + '*' * (self.ref_level - 1)
         else:
-            return '%s.%s' % (self.type, self.name)
+            return None
+
+    @property
+    def user_type(self):
+        if self.type == Types.ptr:
+            return str(self.ref_type) + '*' * self.ref_level
+        else:
+            return self.type
+
+    def __repr__(self):
+        return '%s.%s' % (self.user_type, self.name)
 
     def __eq__(self, other):
         return type(other) == Variable \
@@ -106,14 +128,21 @@ class CompiledValue(object):
         return str(self.value)
 
 class Constant(object):
-    def __init__(self, value, typ):
+    def __init__(self, value, typ, coord=None):
         assert type(value) == CompiledValue
         assert typ.parent == Types
         self.value = value
         self.type = typ
+        self.coord = coord
 
     def __repr__(self):
         return '%s.%s' % (self.type, self.value)
+
+
+class BaseStmt(object):
+    def __init__(self, coord=None):
+        self.coord = coord
+
 
 class BinaryOp(Enum):
     Add = '+'
@@ -135,8 +164,9 @@ class BinaryOp(Enum):
     Leq = '<='
     Geq = '>='
 
-class BinaryStmt(object):
-    def __init__(self, dst, op, srcA, srcB):
+class BinaryStmt(BaseStmt):
+    def __init__(self, dst, op, srcA, srcB, **kwargs):
+        super(BinaryStmt, self).__init__(**kwargs)
         assert type(dst) == Variable
         assert op.parent == BinaryOp
         assert type(srcA) == Variable
@@ -158,8 +188,9 @@ class UnaryOp(Enum):
     Negate = '~'
     Minus = '-'
 
-class UnaryStmt(object):
-    def __init__(self, dst, op, src):
+class UnaryStmt(BaseStmt):
+    def __init__(self, dst, op, src, **kwargs):
+        super(UnaryStmt, self).__init__(**kwargs)
         assert type(dst) == Variable
         assert op.parent == UnaryOp
         assert type(src) == Variable
@@ -172,8 +203,9 @@ class UnaryStmt(object):
     def __repr__(self):
         return '%s = %s%s' % (self.dst, self.op, self.src)
 
-class ConstantStmt(object):
-    def __init__(self, dst, imm):
+class ConstantStmt(BaseStmt):
+    def __init__(self, dst, imm, **kwargs):
+        super(ConstantStmt, self).__init__(**kwargs)
         assert type(dst) == Variable
         assert type(imm) == Constant
         if dst.type != imm.type:
@@ -184,8 +216,9 @@ class ConstantStmt(object):
     def __repr__(self):
         return '%s = %s' % (self.dst, self.imm)
 
-class CastStmt(object):
-    def __init__(self, dst, src):
+class CastStmt(BaseStmt):
+    def __init__(self, dst, src, **kwargs):
+        super(CastStmt, self).__init__(**kwargs)
         assert type(dst) == Variable
         assert type(src) == Variable
         self.dst = dst
@@ -194,8 +227,9 @@ class CastStmt(object):
     def __repr__(self):
         return '%s = (%s) %s' % (self.dst, self.dst.type, self.src)
 
-class GotoStmt(object):
-    def __init__(self, dst_block):
+class GotoStmt(BaseStmt):
+    def __init__(self, dst_block, **kwargs):
+        super(GotoStmt, self).__init__(**kwargs)
         assert type(dst_block) == BasicBlock
         self.dst_block = dst_block
 
@@ -210,8 +244,9 @@ class ComparisonOp(Enum):
     Leq = '<='
     Geq = '>='
 
-class CondJumpStmt(object):
-    def __init__(self, true_block, false_block, srcA, op, imm):
+class CondJumpStmt(BaseStmt):
+    def __init__(self, true_block, false_block, srcA, op, imm, **kwargs):
+        super(CondJumpStmt, self).__init__(**kwargs)
         assert type(true_block) == BasicBlock
         assert type(false_block) == BasicBlock
         assert type(srcA) == Variable
@@ -228,16 +263,18 @@ class CondJumpStmt(object):
     def __repr__(self):
         return 'if (%s %s %s) goto %s else goto %s' % (self.srcA, self.op, self.imm, self.true_block, self.false_block)
 
-class ParamStmt(object):
-    def __init__(self, arg):
+class ParamStmt(BaseStmt):
+    def __init__(self, arg, **kwargs):
+        super(ParamStmt, self).__init__(**kwargs)
         assert type(arg) == Variable
         self.arg = arg
 
     def __repr__(self):
         return 'param %s' % (self.arg,)
 
-class CallStmt(object):
-    def __init__(self, dst, func_ptr, nargs):
+class CallStmt(BaseStmt):
+    def __init__(self, dst, func_ptr, nargs, **kwargs):
+        super(CallStmt, self).__init__(**kwargs)
         assert type(dst) == Variable
         assert type(func_ptr) == Variable
         assert type(nargs) == int
@@ -248,12 +285,13 @@ class CallStmt(object):
     def __repr__(self):
         return '%s = call %s, %d' % (self.dst, self.func_ptr, self.nargs)
 
-class ReturnStmt(object):
+class ReturnStmt(BaseStmt):
     def __repr__(self):
         return 'return'
 
-class RefStmt(object): # basically &x operator
-    def __init__(self, dst, var):
+class RefStmt(BaseStmt): # basically &x operator
+    def __init__(self, dst, var, **kwargs):
+        super(RefStmt, self).__init__(**kwargs)
         assert type(dst) == Variable
         assert type(var) == Variable
         self.dst = dst
@@ -262,8 +300,9 @@ class RefStmt(object): # basically &x operator
     def __repr__(self):
         return '%s = &%s' % (self.dst, self.var)
 
-class DerefReadStmt(object): # basically *x operator
-    def __init__(self, dst, ptr):
+class DerefReadStmt(BaseStmt): # basically *x operator
+    def __init__(self, dst, ptr, **kwargs):
+        super(DerefReadStmt, self).__init__(**kwargs)
         assert type(dst) == Variable
         assert type(ptr) == Variable
 
@@ -279,17 +318,20 @@ class DerefReadStmt(object): # basically *x operator
     def __repr__(self):
         return '%s = *%s' % (self.dst, self.ptr)
 
-class DerefWriteStmt(object): # basically *x operator
-    def __init__(self, ptr, src):
+
+class DerefWriteStmt(BaseStmt): # basically *x operator
+    def __init__(self, ptr, src, **kwargs):
+        super(DerefWriteStmt, self).__init__(**kwargs)
         assert type(ptr) == Variable
         assert type(src) == Variable
 
-        if src.ref_level != ptr.ref_level - 1:
-            raise SyntaxError('inconsistent reference levels %d and %d' % (src.ref_level, ptr.ref_level))
-        if src.ref_level == 0 and src.type != ptr.ref_type:
-            raise SyntaxError('inconsistent dereferenced type')
-        if src.ref_level > 0 and src.ref_type != ptr.ref_type:
-            raise SyntaxError('inconsistent referenced type')
+        if ptr.ref_level == 0:
+            raise ParseError('cannot dereference %s' % ptr.user_type, coord=self.coord)
+
+        if src.ref_level != ptr.ref_level - 1 \
+                or (src.ref_level == 0 and src.type != ptr.ref_type) \
+                or (src.ref_level > 0 and src.ref_type != ptr.ref_type):
+            raise ParseError('cannot assign type %s into type %s' % (src.user_type, ptr.deref_type), coord=self.coord)
 
         self.ptr = ptr
         self.src = src
@@ -297,11 +339,13 @@ class DerefWriteStmt(object): # basically *x operator
     def __repr__(self):
         return '*%s = %s' % (self.ptr, self.src)
 
-class CommentStmt(object):
+
+class CommentStmt(BaseStmt):
     """
     For debugging purposes.
     """
-    def __init__(self, text):
+    def __init__(self, text, **kwargs):
+        super(CommentStmt, self).__init__(**kwargs)
         self.text = text
 
     def __repr__(self):
@@ -390,9 +434,9 @@ class Function(object):
     def num_args(self):
         return len(self.params)
 
-    def new_temporary(self, typ, ref_level, ref_type):
+    def new_temporary(self, typ, ref_level, ref_type, coord=None):
         name = 't' + str(len(self.temporaries))
-        il_var = Variable(name, typ, ref_level, ref_type)
+        il_var = Variable(name, typ, ref_level, ref_type, coord=coord)
         self.temporaries[il_var] = il_var
         return il_var
 
@@ -451,10 +495,11 @@ class GlobalName(object):
     Represents a value to be allocated somewhere in the binary, such as a
     function, or a global variable.
     """
-    def __init__(self, name, value, init=None, location=0, linkage='C'):
+    def __init__(self, name, value, init=None, location=0, linkage='C', coord=None):
         assert init is None or type(init) == CompiledValue
         self.name = name
         self.value = value
         self.init = init
         self.location = location
         self.linkage = linkage
+        self.coord = None

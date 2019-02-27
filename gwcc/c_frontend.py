@@ -9,6 +9,7 @@ from pycparser import c_ast
 
 import cfg
 import il
+from il import ParseError
 from gwcc.exceptions import UnsupportedFeatureError
 from gwcc.optimization.naturalization_pass import NaturalizationPass
 
@@ -83,7 +84,6 @@ class Frontend(object):
         return len(self._scope_stack)
 
     def scope_push(self):
-        SyntaxError
         scope_name = 'local_%s' % (self._scope_cnt,)
         self._scope_cnt += 1
         new_scope = Scope(scope_name, self.current_scope.height + 1, self.current_scope)
@@ -133,7 +133,7 @@ class Frontend(object):
         assert type(node) == c_ast.Decl
         decl_name = node.name
         if decl_name in self.current_scope.symbols:
-            raise SyntaxError("redefinition of %s" % (decl_name,))
+            raise ParseError("redefinition of %s" % (decl_name,), coord=node.coord)
         else:
             self.current_scope.symbols[decl_name] = node
 
@@ -173,26 +173,25 @@ class Frontend(object):
             self._c_variables[node] = il_var
             return il_var
 
-
-    def duplicate_var(self, var):
+    def duplicate_var(self, var, coord=None):
         """
         Creates a new temporary with the same type, reflevel, and reftype as the one specified.
         """
         assert type(var) == il.Variable
-        return self.cur_func.new_temporary(var.type, var.ref_level, var.ref_type)
+        return self.cur_func.new_temporary(var.type, var.ref_level, var.ref_type, coord=coord)
 
-    def on_assign(self, dst, src):
+    def on_assign(self, dst, src, coord=None):
         assert type(dst) == il.Variable
         assert type(src) == il.Variable
 
         if dst.type != src.type:
             if dst.type == il.Types.ptr:
                 assert dst.ref_level > 0
-            return il.CastStmt(dst, src)
+            return il.CastStmt(dst, src, coord=coord)
         else:
             assert dst.ref_level == src.ref_level
             assert dst.ref_type == src.ref_type
-            return il.UnaryStmt(dst, il.UnaryOp.Identity, src)
+            return il.UnaryStmt(dst, il.UnaryOp.Identity, src, coord=coord)
 
     def on_funcdef_node(self, node):
         assert type(node) == c_ast.FuncDef
@@ -212,7 +211,7 @@ class Frontend(object):
                 argvars.append(self.on_decl_node(param_decl))
 
         self.cur_func = il.Function(func_decl.name, argvars, retvar)
-        self._globals.append(il.GlobalName(func_decl.name, self.cur_func, None, self.cur_pragma_loc))
+        self._globals.append(il.GlobalName(func_decl.name, self.cur_func, None, self.cur_pragma_loc, self.cur_pragma_linkage))
         self._c_variables[func_decl] = self.cur_func
         self.cur_block = self.cur_func.cfg.new_block()
 
@@ -270,13 +269,26 @@ class Frontend(object):
         self.cur_block = self.cur_func.cfg.new_block()
 
     def on_binary_op_node(self, node):
-        srcA = self.on_expr_node(node.left)
-        srcB = self.on_expr_node(node.right)
-        il_op = Frontend.parse_binary_op(node.op)
-        return self.on_binary_op(srcA, srcB, il_op)
+        # Transform >= and <= when used with a constant, to the non-equal variants
+        if type(node.right) == c_ast.Constant and node.op in ('<=', '>='):
+            src_a = self.on_expr_node(node.left)
+            if node.op == '<=':
+                op = '<'
+                src_b = self.on_constant_node(node.right, offset=1)
+            else:  # >=
+                op = '>'
+                src_b = self.on_constant_node(node.right, offset=-1)
+
+            il_op = Frontend.parse_binary_op(op, coord=node.coord)
+            return self.on_binary_op(src_a, src_b, il_op)
+
+        src_a = self.on_expr_node(node.left)
+        src_b = self.on_expr_node(node.right)
+        il_op = Frontend.parse_binary_op(node.op, coord=node.coord)
+        return self.on_binary_op(src_a, src_b, il_op)
 
     @staticmethod
-    def parse_binary_op(op):
+    def parse_binary_op(op, coord=None):
         if op == '+':
             return il.BinaryOp.Add
         elif op == '-':
@@ -300,9 +312,9 @@ class Frontend(object):
         elif op == '|':
             return il.BinaryOp.Or
         else:
-            raise UnsupportedFeatureError('unsupported binary operation ' + op)
+            raise ParseError('unsupported binary operation ' + op, coord=coord)
 
-    def on_binary_op(self, srcA, srcB, il_op):
+    def on_binary_op(self, srcA, srcB, il_op, coord=None):
         assert type(srcA) == il.Variable
         assert type(srcB) == il.Variable
         assert il_op.parent == il.BinaryOp
@@ -312,20 +324,20 @@ class Frontend(object):
             srcA_casted = srcA
             srcB_casted = srcB
         elif il.Types.is_less_than(a_type, b_type):
-            srcA_casted = self.duplicate_var(srcB)
-            cast_stmt = self.on_assign(srcA_casted, srcA)
+            srcA_casted = self.duplicate_var(srcB, coord=coord)
+            cast_stmt = self.on_assign(srcA_casted, srcA, coord=coord)
             self.add_stmt(cast_stmt)
             srcB_casted = srcB
         elif il.Types.is_less_than(b_type, a_type):
             srcA_casted = srcA
-            srcB_casted = self.duplicate_var(srcA)
-            cast_stmt = self.on_assign(srcB_casted, srcB)
+            srcB_casted = self.duplicate_var(srcA, coord=coord)
+            cast_stmt = self.on_assign(srcB_casted, srcB, coord=coord)
             self.add_stmt(cast_stmt)
         else:
             assert False # wtf
 
-        new_var = self.duplicate_var(srcA_casted)
-        new_stmt = il.BinaryStmt(new_var, il_op, srcA_casted, srcB_casted)
+        new_var = self.duplicate_var(srcA_casted, coord=coord)
+        new_stmt = il.BinaryStmt(new_var, il_op, srcA_casted, srcB_casted, coord=coord)
         self.add_stmt(new_stmt)
         return new_var
 
@@ -333,17 +345,17 @@ class Frontend(object):
         assert type(ptr_var) == il.Variable
         assert ptr_var.ref_level > 0
         if ptr_var.ref_level > 1:
-            dst_var = self.cur_func.new_temporary(il.Types.ptr, ptr_var.ref_level - 1, ptr_var.ref_type)
+            dst_var = self.cur_func.new_temporary(il.Types.ptr, ptr_var.ref_level - 1, ptr_var.ref_type, coord=ptr_var.coord)
         else:
-            dst_var = self.cur_func.new_temporary(ptr_var.ref_type, 0, None)
-        self.add_stmt(il.DerefReadStmt(dst_var, ptr_var))
+            dst_var = self.cur_func.new_temporary(ptr_var.ref_type, 0, None, coord=ptr_var.coord)
+        self.add_stmt(il.DerefReadStmt(dst_var, ptr_var, coord=ptr_var.coord))
         return dst_var
 
     def on_reference(self, var):
         assert type(var) == il.Variable
         ref_type = var.type if var.ref_level == 0 else var.ref_type
-        dst_var = self.cur_func.new_temporary(il.Types.ptr, var.ref_level + 1, ref_type)
-        self.add_stmt(il.RefStmt(dst_var, var))
+        dst_var = self.cur_func.new_temporary(il.Types.ptr, var.ref_level + 1, ref_type, coord=var.coord)
+        self.add_stmt(il.RefStmt(dst_var, var, coord=var.coord))
         return dst_var
 
     def on_assign_node(self, node): # assignment EXRESSION
@@ -369,9 +381,9 @@ class Frontend(object):
             rhs_value = self.on_binary_op(lhs_value, rhs_value, op)
 
         if is_ptr:
-            self.add_stmt(il.DerefWriteStmt(lhs, rhs_value))
+            self.add_stmt(il.DerefWriteStmt(lhs, rhs_value, coord=node.coord))
         else:
-            self.add_stmt(self.on_assign(lhs, rhs_value))
+            self.add_stmt(self.on_assign(lhs, rhs_value, coord=node.coord))
 
         # rhs_value is a variable which holds the newly-stored value
         assert type(rhs_value) == il.Variable
@@ -383,19 +395,19 @@ class Frontend(object):
         cond_block = self.cur_func.cfg.new_block() # block holding loop conditional
         stmt_block = self.cur_func.cfg.new_block() # block holding loop body
         end_block = self.cur_func.cfg.new_block() # next block after loop
-        self.add_stmt(il.GotoStmt(cond_block))
+        self.add_stmt(il.GotoStmt(cond_block, coord=node.coord))
 
         # handle cond
         self.cur_block = cond_block
         cond_var = self.on_expr_node(node.cond)
-        self.add_stmt(il.CondJumpStmt(stmt_block, end_block, cond_var, il.ComparisonOp.Neq,
-                                      il.Constant(Frontend.make_int_constant(0), cond_var.type)))
+        const_zero = il.Constant(Frontend.make_int_constant(0), cond_var.type, coord=node.coord)
+        self.add_stmt(il.CondJumpStmt(stmt_block, end_block, cond_var, il.ComparisonOp.Neq, const_zero, coord=node.coord))
 
         # handle stmt
         self.cur_block = stmt_block
         self.loop_stack.append((cond_block, end_block))
         self.on_stmt_node(node.stmt)
-        self.add_stmt(il.GotoStmt(cond_block))
+        self.add_stmt(il.GotoStmt(cond_block, coord=node.coord))
 
         self.loop_stack.pop()
         self.cur_block = end_block
@@ -407,11 +419,11 @@ class Frontend(object):
             try:
                 loc = int(parts[1], 0)
             except ValueError:
-                raise SyntaxError('invalid pragma location: ' + parts[1])
+                raise ParseError('invalid pragma location: ' + parts[1], coord=node.coord)
             self.cur_pragma_loc = loc
         elif parts[0] == 'extern':
             if len(parts) != 2:
-                raise SyntaxError('invalid linkage pragma: ' + node.string)
+                raise ParseError('invalid linkage pragma: ' + node.string, coord=node.coord)
             self.cur_pragma_linkage = parts[1]
         else:
             sys.stderr.write('warning: ignored pragma ' + pragma + '\n')
@@ -450,36 +462,34 @@ class Frontend(object):
         assert type(node) == c_ast.Continue
 
         if not self.cur_func:
-            raise SyntaxError("use of 'continue' outside of function")
+            raise ParseError("use of 'continue' outside of function", coord=node.coord)
         if not self.loop_stack:
-            raise SyntaxError("use of 'continue' outside of loop")
+            raise ParseError("use of 'continue' outside of loop", coord=node.coord)
         start_block, end_block = self.loop_stack[-1]
-        self.add_stmt(il.GotoStmt(start_block))
+        self.add_stmt(il.GotoStmt(start_block, coord=node.coord))
         self.cur_block = self.cur_func.cfg.new_block()
-
 
     def on_break_node(self, node):
         assert type(node) == c_ast.Break
 
         if not self.cur_func:
-            raise SyntaxError("use of 'break' outside of function")
+            raise ParseError("use of 'break' outside of function", coord=node.coord)
         if not self.loop_stack:
-            raise SyntaxError("use of 'break' outside of loop")
+            raise ParseError("use of 'break' outside of loop", coord=node.coord)
         start_block, end_block = self.loop_stack[-1]
-        self.add_stmt(il.GotoStmt(end_block))
+        self.add_stmt(il.GotoStmt(end_block, coord=node.coord))
         self.cur_block = self.cur_func.cfg.new_block()
 
-    def on_constant(self, const_type, value):
+    def on_constant(self, const_type, value, coord=None):
         assert type(value) == il.CompiledValue
         il_var = self.cur_func.new_temporary(const_type, 0, None)
-        assign_stmt = il.ConstantStmt(il_var, il.Constant(value, const_type))
+        assign_stmt = il.ConstantStmt(il_var, il.Constant(value, const_type, coord=coord), coord=coord)
         self.add_stmt(assign_stmt)
         return il_var
 
-    def on_constant_node(self, node):
-        const_type, value = self.get_constant_value(node)
-        return self.on_constant(const_type, value)
-
+    def on_constant_node(self, node, offset=0):
+        const_type, value = self.get_constant_value(node, offset=offset)
+        return self.on_constant(const_type, value, coord=node.coord)
 
     @staticmethod
     def make_int_constant(value):
@@ -489,37 +499,37 @@ class Frontend(object):
     def make_pointer_constant(value):
         return il.CompiledValue(value, il.CompiledValueType.Pointer)
 
-    def get_constant_value(self, node):
+    def get_constant_value(self, node, offset=0):
         if node.type == 'int':
-            return il.Types.int, Frontend.make_int_constant(int(node.value, 0))
+            return il.Types.int, Frontend.make_int_constant(int(node.value, 0) + offset)
         elif node.type == 'string':
             assert type(node.value) == str
             if node.value[0] != '"' or node.value[-1] != '"':
-                raise SyntaxError('invalid char constant ' + node.value)
+                raise ParseError('invalid char constant ' + node.value, coord=node.coord)
             str_value = node.value[1:-1] + '\0'
             value_escaped = ''.join(c for c in str_value if c.isalnum())
             var_name = '__A_' + value_escaped
-            il_var = il.Variable(var_name, il.Types.char)
+            il_var = il.Variable(var_name, il.Types.char, coord=node.coord)
             string_init = il.CompiledValue(map(ord, str_value), il.CompiledValueType.WordArray)
-            self._globals.append(il.GlobalName(var_name, il_var, string_init, self.cur_pragma_loc, self.cur_pragma_linkage))
+            self._globals.append(il.GlobalName(var_name, il_var, string_init, self.cur_pragma_loc, self.cur_pragma_linkage, coord=node.coord))
             return il.Types.ptr, Frontend.make_pointer_constant(var_name)
         elif node.type == 'char':
             if node.value[0] != "'" or node.value[-1] != "'":
-                raise SyntaxError('invalid char constant ' + node.value)
+                raise ParseError('invalid char constant ' + node.value, coord=node.coord)
             return il.Types.char, Frontend.make_int_constant(ord(str(node.value[1:-1]).decode('string-escape')))
         else:
             raise UnsupportedFeatureError('unsupported constant type ' + node.type)
 
     def on_postincrement_node(self, expr_node):
-        expr_var = self.on_expr_node(expr_node) # lol, this will result in a blatant common subexpression
-        tmp_var = self.duplicate_var(expr_var) # this extra copy here is required in case expr_node is a local
-        self.add_stmt(self.on_assign(tmp_var, expr_var))
+        expr_var = self.on_expr_node(expr_node)  # lol, this will result in a blatant common subexpression
+        tmp_var = self.duplicate_var(expr_var, coord=expr_node.coord)  # this extra copy here is required in case expr_node is a local
+        self.add_stmt(self.on_assign(tmp_var, expr_var, coord=expr_node.coord))
         self.on_preincrement_node(expr_node)
         return tmp_var
 
     def on_preincrement_node(self, expr_node):
         # this is kinda hacky but w/e
-        return self.on_assign_node(c_ast.Assignment('+=', expr_node, c_ast.Constant('int', '1')))
+        return self.on_assign_node(c_ast.Assignment('+=', expr_node, c_ast.Constant('int', '1'), coord=expr_node.coord))
 
     def on_postdecrement_node(self, expr_node):
         expr_var = self.on_expr_node(expr_node)
@@ -527,12 +537,12 @@ class Frontend(object):
         return expr_var
 
     def on_predecrement_node(self, expr_node):
-        return self.on_assign_node(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', '1')))
+        return self.on_assign_node(c_ast.Assignment('-=', expr_node, c_ast.Constant('int', '1'), coord=expr_node.coord))
 
     def on_sizeof_node(self, sizeof_node):
         typ = self.get_node_type(sizeof_node.type)
         type_size = self.target_arch.sizeof(typ)
-        return self.on_constant(il.Types.int, Frontend.make_int_constant(type_size))
+        return self.on_constant(il.Types.int, Frontend.make_int_constant(type_size), coord=sizeof_node.coord)
 
     def on_unary_op_node(self, node):
         if node.op == 'p++':
@@ -553,8 +563,8 @@ class Frontend(object):
             return self.on_reference(expr_var)
         else:
             il_op = Frontend.parse_unary_op(node.op)
-            dst_var = self.duplicate_var(expr_var)
-            new_stmt = il.UnaryStmt(dst_var, il_op, expr_var)
+            dst_var = self.duplicate_var(expr_var, coord=node.coord)
+            new_stmt = il.UnaryStmt(dst_var, il_op, expr_var, coord=node.coord)
             self.add_stmt(new_stmt)
             return dst_var
 
@@ -573,16 +583,20 @@ class Frontend(object):
         """Resolve an identifier (ID) node into a variable"""
         scope, ast_decl = self.current_scope.resolve_symbol(node.name)
         if not scope:
-            raise SyntaxError('use of undeclared symbol ' + node.name)
-        il_var = self._c_variables[ast_decl]
-        return il_var
+            raise ParseError('use of undeclared symbol ' + node.name, coord=node.coord)
+
+        try:
+            il_var = self._c_variables[ast_decl]
+            return il_var
+        except KeyError:
+            raise ParseError('Cannot use variable in its definition.', coord=node.coord)
 
     def on_array_ref_node_ptr(self, node):
         # base
         base_var = self.on_expr_node(node.name)
         # subscript
         subscript_var = self.on_expr_node(node.subscript)
-        ptr_var = self.on_binary_op(base_var, subscript_var, il.BinaryOp.Add)
+        ptr_var = self.on_binary_op(base_var, subscript_var, il.BinaryOp.Add, coord=node.coord)
         return ptr_var
 
     def on_array_ref_node(self, node):
@@ -597,23 +611,23 @@ class Frontend(object):
             ref_level, ref_type = self.extract_pointer_type(node.to_type.type)
         else:
             ref_level, ref_type = 0, None
-        dst_var = self.cur_func.new_temporary(to_type, ref_level, ref_type)
+        dst_var = self.cur_func.new_temporary(to_type, ref_level, ref_type, coord=node.coord)
         expr_var = self.on_expr_node(node.expr)
-        self.add_stmt(il.CastStmt(dst_var, expr_var))
+        self.add_stmt(il.CastStmt(dst_var, expr_var, coord=node.coord))
         return dst_var
 
     def on_func_call_node(self, node):
         num_args = 0
         for arg in node.args:
             arg_var = self.on_expr_node(arg)
-            self.add_stmt(il.ParamStmt(arg_var))
+            self.add_stmt(il.ParamStmt(arg_var, coord=node.coord))
             num_args += 1
         func_expr = self.on_expr_node(node.name)
         if type(func_expr) == il.Function:
             # also FIXME
-            func_expr = self.on_constant(il.Types.ptr, il.CompiledValue(func_expr.name, il.CompiledValueType.Pointer))
-        dst_var = self.cur_func.new_temporary(il.Types.int, 0, None)# hack lol FIXME
-        self.add_stmt(il.CallStmt(dst_var, func_expr, num_args))
+            func_expr = self.on_constant(il.Types.ptr, il.CompiledValue(func_expr.name, il.CompiledValueType.Pointer), coord=node.coord)
+        dst_var = self.cur_func.new_temporary(il.Types.int, 0, None, coord=node.coord)  # hack lol FIXME
+        self.add_stmt(il.CallStmt(dst_var, func_expr, num_args, coord=node.coord))
         return dst_var
 
     # nodes that evaluate. return an ILVariable holding the evaluated value
@@ -643,7 +657,7 @@ class Frontend(object):
             if self.cur_func:
                 from pycparser import c_generator
                 generator = c_generator.CGenerator()
-                self.add_stmt(il.CommentStmt(generator.visit(node).split('\n')[0]))
+                self.add_stmt(il.CommentStmt(generator.visit(node).split('\n')[0], coord=node.coord))
             self.on_stmt_node(node)
 
     def compile(self, ast):
@@ -651,10 +665,10 @@ class Frontend(object):
         self._compiled = True
 
     @staticmethod
-    def interpret_identifier_type(names):
+    def interpret_identifier_type(names, coord=None):
         # todo: warn on default-int, repeat short/signed/unsigned specifier, etc.
         def error_specifier(token, spec):
-            raise SyntaxError("cannot combine '%s' with previous declaration specifier %s" % (token, spec))
+            raise ParseError("cannot combine '%s' with previous declaration specifier %s" % (token, spec), coord=coord)
 
         decl_sign = ''
         decl_size = ''
@@ -723,7 +737,7 @@ class Frontend(object):
         if type(node) == c_ast.TypeDecl:
             return self.get_node_type(node.type)
         if type(node) == c_ast.IdentifierType:
-            signedness, decl_size, decl_type = Frontend.interpret_identifier_type(node.names)
+            signedness, decl_size, decl_type = Frontend.interpret_identifier_type(node.names, coord=node.coord)
             builtin_type = Frontend.parse_decl_type(signedness, decl_size, decl_type)
             if builtin_type:
                 return builtin_type

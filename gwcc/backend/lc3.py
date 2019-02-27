@@ -1,10 +1,25 @@
 from collections import defaultdict
 
+from gwcc.backend.util import BackendError
 from gwcc.exceptions import UnsupportedFeatureError
-from ..optimization.dataflow import LivenessAnalysis
-from .. import il
 from .. import cfg
+from .. import il
 from ..abi.lc3 import LC3 as ABI
+from ..optimization.dataflow import LivenessAnalysis
+
+
+class ImmRange(object):
+    def __init__(self, bits):
+        self.max_value = 2 ** (bits - 1) - 1
+        self.min_value = -(2 ** (bits - 1))
+
+    def holds(self, value):
+        return self.min_value <= value <= self.max_value
+
+
+IMM5 = ImmRange(5)
+IMM11 = ImmRange(5)
+
 
 class Relocation(object):
     def __init__(self, asm_idx, asm_len, gen_func, *gen_args):
@@ -24,6 +39,7 @@ class Relocation(object):
         def __repr__(self):
             return 'r!' + self.name
 
+
 class StackLocation(object):
     def __init__(self, bp_offset):
         assert type(bp_offset) == int
@@ -41,6 +57,7 @@ class StackLocation(object):
     def __hash__(self):
         return hash((1, self.bp_offset))
 
+
 class RegisterLocation(object):
     def __init__(self, reg):
         assert type(reg) == str
@@ -55,6 +72,7 @@ class RegisterLocation(object):
     def __hash__(self):
         return hash((2, self.reg))
 
+
 class MemoryLocation(object):
     def __init__(self, name):
         assert type(name) == str
@@ -68,6 +86,7 @@ class MemoryLocation(object):
 
     def __hash__(self):
         return hash((3, self.name))
+
 
 class RegisterAllocator(object):
     register_set = ['r0', 'r1', 'r2', 'r3', 'r4', 'r7']
@@ -91,9 +110,9 @@ class RegisterAllocator(object):
     def alloc_stack(self, local):
         assert type(local) == il.Variable
         size = ABI.sizeof(local.type)
-        for i in range(len(self.stack_slots)+1-size):
+        for i in range(len(self.stack_slots) + 1 - size):
             for j in range(size):
-                if self.stack_slots[i+j] != 0:
+                if self.stack_slots[i + j] != 0:
                     break
             else:
                 slot_index = i
@@ -105,12 +124,12 @@ class RegisterAllocator(object):
         stack_loc = StackLocation(slot_index)
         self.address_desc[local].add(stack_loc)
         for j in range(size):
-            self.stack_slots[slot_index+j] += 1
+            self.stack_slots[slot_index + j] += 1
         print '%s is now at %s' % (local, stack_loc)
         return stack_loc
 
     def free_stack(self, stack_address, size):
-        if stack_address < 0: # don't free params
+        if stack_address < 0:  # don't free params
             return
         print 'freeing %d stack slots at %d' % (size, stack_address)
         for j in range(size):
@@ -131,7 +150,7 @@ class RegisterAllocator(object):
                     stack_address = location.bp_offset
                     self.free_stack(stack_address, size)
             elif type(location) == RegisterLocation:
-            # if type(location) == RegisterLocation:
+                # if type(location) == RegisterLocation:
                 self.register_desc[location.reg].remove(local)
                 print 'reg %s is no longer storing %s' % (location.reg, local)
                 to_remove.add(location)
@@ -141,7 +160,6 @@ class RegisterAllocator(object):
     def free_local_reg(self, local, reg):
         self.register_desc[reg].remove(local)
         self.address_desc[local].remove(RegisterLocation(reg))
-
 
     def spill_reg(self, reg):
         """
@@ -183,7 +201,6 @@ class RegisterAllocator(object):
         for location in self.address_desc[local]:
             return location
         raise RuntimeError('local %s has not been scheduled' % (local,))
-
 
     def getreg(self, live_out, src_local, no_spill):
         """
@@ -239,7 +256,7 @@ class RegisterAllocator(object):
         assert type(local) == il.Variable
         self.address_desc[local].add(reg)
         self.register_desc[reg.reg].add(local)
-        print '%s is now stored in %s' % (local,reg.reg)
+        print '%s is now stored in %s' % (local, reg.reg)
 
     def add_global(self, global_name, memory_loc):
         assert type(global_name) == il.GlobalName
@@ -272,9 +289,9 @@ class LC3(object):
     Stack starts at 0xEFFF and grows toward lower addresses.
     """
 
-    bp = 'r5' # basepointer basepointer basepointer basepointer
-    sp = 'r6' # stack pointer
-    rp = 'r7' # return pointer
+    bp = 'r5'  # basepointer basepointer basepointer basepointer
+    sp = 'r6'  # stack pointer
+    rp = 'r7'  # return pointer
     retval_reg = 'r0'
 
     def __init__(self, names, with_symbols=True):
@@ -286,7 +303,7 @@ class LC3(object):
         self._global_vars = {glob.value: glob for glob in self._global_names if type(glob.value) == il.Variable}
 
         # state
-        self._mappings = {} # where all the global vars are gettin allocated
+        self._mappings = {}  # where all the global vars are gettin allocated
         self._deferred_relocations = []
         self._cur_binary_loc = None
         self._cur_orig = None
@@ -308,7 +325,7 @@ class LC3(object):
         elif global_name.linkage == 'asm':
             return global_name.name
         else:
-            raise SyntaxError('unsupported linkage declaration ' + global_name.linkage)
+            raise BackendError('unsupported linkage declaration ' + global_name.linkage)
 
     def mangle_name_c(self, name):
         if name in self._label_cache:
@@ -324,9 +341,6 @@ class LC3(object):
     def name_return_block(self, fn):
         return self.mangle_name_c(fn.name + '_return')
 
-
-
-
     def place_relocation(self, name):
         self.emit_newline()
         self.emit_comment('------- symbol: %s' % (name,) + ' --------')
@@ -337,11 +351,6 @@ class LC3(object):
 
     def get_binary_location(self, name):
         return self._mappings[name]
-
-
-
-
-
 
     def make_reloc(self, gen_func, *args):
         asm_idx_start = len(self._asm)
@@ -375,12 +384,8 @@ class LC3(object):
         for reloc in self._deferred_relocations:
             self._apply_reloc(reloc)
 
-
-
-
-
     def _emit_line(self, line, binary_len):
-        line += '\t; loc=%02x' % (self._cur_binary_loc,)
+        line += (' ' * max(0, 40 - len(line))) + '; loc=%02x' % (self._cur_binary_loc,)
         self._asm.append(line)
         self._cur_binary_loc += binary_len
 
@@ -393,13 +398,16 @@ class LC3(object):
             self._asm.append('; ' + line)
 
     def emit_insn(self, insn):
-        self._emit_line(insn, 1)
+        self._emit_line('    ' + insn, 1)
 
     def emit_orig(self, to):
         self._emit_line('.orig x%x' % (to,), 0)
 
     def emit_section_end(self):
         self._emit_line('.end', 0)
+
+    def emit_label(self, name):
+        self._emit_line(name, 0)
 
     def emit_fill(self, value, name=''):
         if name:
@@ -409,9 +417,6 @@ class LC3(object):
 
     def emit_blkw(self, name, size):
         self._emit_line('%s .blkw %d' % (name, size), size)
-
-
-
 
     def cl_zero_reg(self, reg):
         """
@@ -442,8 +447,7 @@ class LC3(object):
 
     def cl_move(self, dst_reg, src_reg):
         self.emit_comment('mov ' + dst_reg + ', ' + src_reg)
-        self.cl_zero_reg(dst_reg)
-        self.emit_insn('add %s, %s, %s' % (dst_reg, dst_reg, src_reg))
+        self.emit_insn('add %s, %s, #0' % (dst_reg, src_reg))
 
     def cl_sub(self, dst_reg, src_reg):
         # self.emit_comment('sub ' + dst_reg + ', ' + src_reg)
@@ -466,10 +470,16 @@ class LC3(object):
         self.cl_ones(src_reg)
 
     def cl_load_reg(self, reg, value):
-        self.cl_zero_reg(reg)
-        self.emit_insn('LD %s, #1' % (reg,))
-        self.emit_insn('BRnzp #1')
-        self.emit_fill(value)
+        if IMM5.holds(value):
+            self.emit_comment('load short: %s <- %d (0x%02x)' % (reg, value, value))
+            self.cl_zero_reg(reg)
+            if value != 0:
+                self.emit_insn('add %s, %s, #%d' % (reg, reg, value))
+        else:
+            self.emit_comment('load long: %s <- %d (0x%02x)' % (reg, value, value))
+            self.emit_insn('LD %s, #1' % (reg,))
+            self.emit_insn('BR #1')
+            self.emit_fill(value)
 
     def cl_load_reg_funny(self, reg, value):
         """
@@ -487,43 +497,42 @@ class LC3(object):
         self.cl_test(dst_reg)
         self.emit_insn('BRz #2')  # branch to TRUE
         self.cl_zero_reg(dst_reg)
-        self.emit_insn('BRnzp #2')  # branch over TRUE
+        self.emit_insn('BR #2')  # branch over TRUE
         self.cl_zero_reg(dst_reg)
         self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
 
-    def cl_lt_unsigned(self, dst_reg, src_reg): # dst_reg = dst_reg < src_reg
+    def cl_lt_unsigned(self, dst_reg, src_reg):  # dst_reg = dst_reg < src_reg
         self.cl_test(dst_reg)
         self.emit_insn('BRn #3')  # branch to A_NEGATIVE
         self.cl_test(src_reg)  # A_NONNEGATIVE
         self.emit_insn('BRn #12')  # if b negative, branch to TRUE
-        self.emit_insn('BRnzp #2')  # jump to COMPARE
+        self.emit_insn('BR #2')  # jump to COMPARE
         self.cl_test(src_reg)  # A_NEGATIVE
         self.emit_insn('BRzp #9')  # if b non-negative, branch to FALSE
         self.cl_sub(dst_reg, src_reg)  # COMPARE: (THIS IS 5 INSTRUCTIONS.)
         self.cl_test(dst_reg)
         self.emit_insn('BRn #2')  # branch to TRUE
         self.cl_zero_reg(dst_reg)  # FALSE:
-        self.emit_insn('BRnzp #2')  # jump to END:
+        self.emit_insn('BR #2')  # jump to END:
         self.cl_zero_reg(dst_reg)  # TRUE:
         self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
 
-    def cl_lt_signed(self, dst_reg, src_reg): # dst_reg = dst_reg < src_reg
+    def cl_lt_signed(self, dst_reg, src_reg):  # dst_reg = dst_reg < src_reg
         self.cl_test(dst_reg)
         self.emit_insn('BRn #3')  # branch to A_NEGATIVE
         self.cl_test(src_reg)  # A_NONNEGATIVE
         self.emit_insn('BRn #10')  # branch to FALSE
-        self.emit_insn('BRnzp #2')  # jump to COMPARE
+        self.emit_insn('BR #2')  # jump to COMPARE
         self.cl_test(src_reg)  # A_NEGATIVE
         self.emit_insn('BRzp #9')  # if b non-negative, branch to TRUE
         self.cl_sub(dst_reg, src_reg)  # COMPARE: (THIS IS 5 INSTRUCTIONS.)
         self.cl_test(dst_reg)
         self.emit_insn('BRn #2')  # branch to TRUE
         self.cl_zero_reg(dst_reg)  # FALSE:
-        self.emit_insn('BRnzp #2')  # jump to END:
+        self.emit_insn('BR #2')  # jump to END:
         self.cl_zero_reg(dst_reg)  # TRUE:
         self.emit_insn('add %s, %s, #1' % (dst_reg, dst_reg))
         # END:
-
 
     def reloc_load_address(self, reg, name):
         if self.is_name_mapped(name):
@@ -533,7 +542,6 @@ class LC3(object):
             self.emit_comment('relocated load: %s <- %s' % (reg, name))
             self.make_reloc(self.cl_load_reg, reg, Relocation.Resolved(name))
 
-
     def reloc_dump_address(self, name, asm_label=''):
         if self.is_name_mapped(name):
             self.emit_comment('address: ' + name)
@@ -541,10 +549,6 @@ class LC3(object):
         else:
             self.emit_comment('relocated address: ' + name)
             self.make_reloc(self.emit_fill, Relocation.Resolved(name), asm_label)
-
-
-
-
 
     def emit_stub(self):
         """
@@ -579,7 +583,7 @@ class LC3(object):
             self.emit_blkw(asm_name, 1)
 
     def vl_shift_bp(self, bp_offset, callback):
-        bp_delta = 0 # how much the bp moved, so how much we have to unshift it by
+        bp_delta = 0  # how much the bp moved, so how much we have to unshift it by
         while bp_offset < -32:
             self.emit_insn('add %s, %s, #-16' % (self.bp, self.bp))
             bp_offset -= -16
@@ -618,7 +622,11 @@ class LC3(object):
     def emit_function(self, glob):
         self.place_relocation(glob.name)
 
+        asm_name = self.mangle_globalname(glob)
+        self.emit_label(asm_name)
+
         func = glob.value
+
         # print func.pretty_print()
         # with open('tmp_cfg_func_%s.dot' % func.name, 'w') as f:
         #     func.dump_graph(fd=f)
@@ -671,7 +679,7 @@ class LC3(object):
         for bb in func.cfg.basic_blocks:
             for edge in func.cfg.get_edges(bb):
                 print >> fd, "%s -> %s;" % (edge.src, edge.dst)
-        print >>fd, "}\n"
+        print >> fd, "}\n"
         fd.close()
 
         for bb in cfg.topoorder(func.cfg):
@@ -788,22 +796,22 @@ class LC3(object):
                     self.cl_zero_reg(dst_reg)
                 elif stmt.op == il.BinaryOp.LogicalAnd:
                     self.cl_test(dst_reg)
-                    self.emit_insn('BRz #5') # branch to FALSE
+                    self.emit_insn('BRz #5')  # branch to FALSE
                     self.cl_test(c_reg)
                     self.emit_insn('BRz #3')
-                    self.cl_zero_reg(dst_reg) # TRUE
+                    self.cl_zero_reg(dst_reg)  # TRUE
                     self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
-                    self.emit_insn('BRnzp #1')
-                    self.cl_zero_reg(dst_reg) # FALSE
+                    self.emit_insn('BR #1')
+                    self.cl_zero_reg(dst_reg)  # FALSE
                 elif stmt.op == il.BinaryOp.LogicalOr:
                     self.cl_test(dst_reg)
-                    self.emit_insn('BRnp #2') # branch to TRUE
+                    self.emit_insn('BRnp #2')  # branch to TRUE
                     self.cl_test(c_reg)
-                    self.emit_insn('BRz #3') # branch to FALSE
-                    self.cl_zero_reg(dst_reg) # TRUE
+                    self.emit_insn('BRz #3')  # branch to FALSE
+                    self.cl_zero_reg(dst_reg)  # TRUE
                     self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
-                    self.emit_insn('BRnzp #1')
-                    self.cl_zero_reg(dst_reg) # FALSE
+                    self.emit_insn('BR #1')
+                    self.cl_zero_reg(dst_reg)  # FALSE
                 elif stmt.op == il.BinaryOp.Equ:
                     self.cl_eq(dst_reg, c_reg)
                 elif stmt.op == il.BinaryOp.Neq:
@@ -812,9 +820,9 @@ class LC3(object):
                 else:
                     raise UnsupportedFeatureError('unsupported binary operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
-                if stmt.op == il.UnaryOp.Identity: # this is a MOVE!!!!!
+                if stmt.op == il.UnaryOp.Identity:  # this is a MOVE!!!!!
                     if dst_local in live_out and stmt.src not in func.locals:
-                        reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src) # THIS MOVE HAS SPECIAL SEMANTIC
+                        reg_alloc.store_reg(RegisterLocation(dst_reg), stmt.src)  # THIS MOVE HAS SPECIAL SEMANTIC
                 elif stmt.op == il.UnaryOp.Minus:
                     self.cl_twos(dst_reg)
                 elif stmt.op == il.UnaryOp.Negate:
@@ -826,7 +834,7 @@ class LC3(object):
                     self.cl_load_reg(dst_reg, stmt.imm.value.value)
                 elif stmt.imm.value.type == il.CompiledValueType.Pointer:
                     self.emit_insn('LD %s, #1' % (dst_reg,))
-                    self.emit_insn('BRnzp #1')
+                    self.emit_insn('BR #1')
                     self.reloc_dump_address(stmt.imm.value.value)
                 else:
                     raise RuntimeError('unsupported compiled constant type')
@@ -917,13 +925,12 @@ class LC3(object):
                 tmp_reg = reg_alloc.getreg(live_out, None, [dst_reg, c_reg])
                 self.emit_insn('LD %s, #2' % (tmp_reg,))
                 self.emit_insn('STR %s, %s, #0' % (dst_reg, tmp_reg))
-                self.emit_insn('BRnzp #1')
+                self.emit_insn('BR #1')
                 self.reloc_dump_address(self.mangle_globalname(self._global_vars[dst_local]))
             self.emit_newline()
 
-
     def emit_func_prologue(self, locals_size):
-        self.emit_insn('add %s, %s, #-1' % (self.sp, self.sp)) # save space for ret val
+        self.emit_insn('add %s, %s, #-1' % (self.sp, self.sp))  # save space for ret val
         self.cl_push(self.rp)
         self.cl_push(self.bp)
         self.cl_push('r0')
@@ -955,7 +962,7 @@ class LC3(object):
     def emit_global_name(self, global_name):
         if global_name.location > 0 and self._cur_orig != global_name.location:
             if global_name.location < 0x3000 or global_name.location > 0xbfff:
-                raise SyntaxError('pragma location 0x%x not in range 0x3000-0xbfff' % (global_name.location,))
+                raise BackendError('pragma location 0x%x not in range 0x3000-0xbfff' % (global_name.location,))
             self.emit_section_end()
             self.emit_newline()
             self.emit_orig(global_name.location)
