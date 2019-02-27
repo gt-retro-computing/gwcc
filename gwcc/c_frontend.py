@@ -606,10 +606,11 @@ class Frontend(object):
 
     def on_func_call_node(self, node):
         num_args = 0
-        for arg in node.args:
-            arg_var = self.on_expr_node(arg)
-            self.add_stmt(il.ParamStmt(arg_var))
-            num_args += 1
+        if node.args:
+            for arg in node.args:
+                arg_var = self.on_expr_node(arg)
+                self.add_stmt(il.ParamStmt(arg_var))
+                num_args += 1
         func_expr = self.on_expr_node(node.name)
         if type(func_expr) == il.Function:
             # also FIXME
