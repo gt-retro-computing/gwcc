@@ -24,6 +24,7 @@
 unsigned int A = 63090, B = 14233, X = 19253;
 unsigned int ANSWER;
 int main() {
+
     ANSWER = 0;
     if ((A > X) && (B < X))
         ANSWER = ~(A & B);
