@@ -48,7 +48,7 @@ if __name__ == '__main__':
     args_parser = argparse.ArgumentParser()
     args_parser.add_argument('source_file', default='testcases/1.c', nargs='?')
     args_parser.add_argument('-o', '--output', nargs=1)
-    args_parser.add_argument('-g', '--symbols', action='store_true')
+    args_parser.add_argument('-g', '--symbols', action='store_true', default=True)
     args_parser.add_argument('--gen-dot', action='store_true')
     args = args_parser.parse_args()
     if args.output is None:
@@ -90,4 +90,7 @@ if __name__ == '__main__':
     print '\n'.join(backend.get_output())
     with open(args.output, 'w') as f:
         f.write('\n'.join(backend.get_output()))
+
+    import os
+    os.system('scp ' + args.output + ' vm:complx')
 

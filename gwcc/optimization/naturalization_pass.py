@@ -77,6 +77,12 @@ class NaturalizationPass(object):
                     cfg.remove_block(bb)
                     break
 
+                # replace conditional jumps where both branches are the same with just a goto
+                if type(bb.stmts[-1]) == il.CondJumpStmt and bb.stmts[-1].true_block == bb.stmts[-1].false_block:
+                    # print 'dropping trivial ' + str(bb)
+                    self.kill_trivial_conditional(bb)
+                    break
+
                 # merge singleton immediate flow siblings
                 if len(cfg.get_edges(bb)) == 1:
                     succ = next(iter(cfg.get_edges(bb))).dst
@@ -91,11 +97,5 @@ class NaturalizationPass(object):
                         # print 'inlining ' + str(bb) + ' as ' + str(bb.stmts[0].dst_block)
                         self.inline(bb, bb.stmts[0].dst_block)
                         break
-
-                # replace conditional jumps where both branches are the same with just a goto
-                if type(bb.stmts[-1]) == il.CondJumpStmt and bb.stmts[-1].true_block == bb.stmts[-1].false_block:
-                    # print 'dropping trivial ' + str(bb)
-                    self.kill_trivial_conditional(bb)
-                    break
             else:
                 break

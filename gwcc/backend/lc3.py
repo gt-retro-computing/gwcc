@@ -18,7 +18,6 @@ class ImmRange(object):
 
 
 IMM5 = ImmRange(5)
-IMM11 = ImmRange(5)
 
 
 class Relocation(object):
@@ -398,7 +397,7 @@ class LC3(object):
             self._asm.append('; ' + line)
 
     def emit_insn(self, insn):
-        self._emit_line('    ' + insn, 1)
+        self._emit_line(insn, 1)
 
     def emit_orig(self, to):
         self._emit_line('.orig x%x' % (to,), 0)
@@ -673,7 +672,7 @@ class LC3(object):
             label += 'LIVE IN: ' + liveness_set_to_str(liveness.live_in(bb)) + '\\l'
             for i in range(len(bb.stmts)):
                 label += str(bb.stmts[i]) + '\\l'
-                label += '    ' + liveness_set_to_str(stmt_liveness[i]) + '\\l'
+                # label += '    ' + liveness_set_to_str(stmt_liveness[i]) + '\\l'
             label += 'LIVE OUT: ' + liveness_set_to_str(liveness.live_out(bb)) + '\\l'
             print >> fd, "    %s [shape=box, label=\"%s\"]" % (bb.name, label)
         for bb in func.cfg.basic_blocks:
@@ -817,6 +816,28 @@ class LC3(object):
                 elif stmt.op == il.BinaryOp.Neq:
                     self.cl_eq(dst_reg, c_reg)
                     self.cl_logical_not(dst_reg)
+                elif stmt.op == il.BinaryOp.Mul:
+                    tmp_mask = reg_alloc.getreg(live_out, None, [dst_reg, c_reg])
+                    tmp_multiplicand = reg_alloc.getreg(live_out, None, [dst_reg, c_reg, tmp_mask])
+                    self.cl_move(tmp_multiplicand, dst_reg)
+                    self.cl_zero_reg(dst_reg)
+                    self.cl_push(c_reg) # save operand value
+                    self.cl_zero_reg(tmp_mask)
+                    self.emit_insn('ADD %s, %s, #1' % (tmp_mask, tmp_mask))
+
+                    for bit in range(0,16):
+                        self.cl_push(tmp_mask) # save mask value
+                        self.emit_insn('AND %s, %s, %s' % (tmp_mask, tmp_mask, tmp_multiplicand))
+                        self.cl_twos(tmp_mask)
+                        self.emit_insn('AND %s, %s, %s' % (tmp_mask, tmp_mask, c_reg)) # mask addend if 0
+                        self.emit_insn('ADD %s, %s, %s' % (dst_reg, dst_reg, tmp_mask)) # add
+                        self.cl_pop(tmp_mask) # restore mask
+
+                        # shift left
+                        self.emit_insn('ADD %s, %s, %s' % (tmp_mask, tmp_mask, tmp_mask))
+                        self.emit_insn('ADD %s, %s, %s' % (c_reg, c_reg, c_reg))
+
+                    self.cl_pop(c_reg)
                 else:
                     raise UnsupportedFeatureError('unsupported binary operation ' + str(stmt.op))
             elif typ == il.UnaryStmt:
@@ -920,9 +941,13 @@ class LC3(object):
                 reg_alloc.free_local_reg(dst_local, dst_reg)
                 self.vl_store_local(dst_reg, reg_alloc.get_loc(dst_local).bp_offset)
 
+            if c_reg and (c_local in self._global_vars or c_local in func.locals):
+                reg_alloc.free_local(c_local)
+
             if dst_local in self._global_vars:
                 print 'writing %s back to global' % (str(dst_local),)
                 tmp_reg = reg_alloc.getreg(live_out, None, [dst_reg, c_reg])
+                reg_alloc.free_local(dst_local)
                 self.emit_insn('LD %s, #2' % (tmp_reg,))
                 self.emit_insn('STR %s, %s, #0' % (dst_reg, tmp_reg))
                 self.emit_insn('BR #1')
