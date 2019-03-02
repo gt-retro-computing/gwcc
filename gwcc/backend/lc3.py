@@ -98,9 +98,9 @@ class RegisterAllocator(object):
         for reg in self.register_set:
             self.register_desc[reg] = set()
 
-        self.address_desc = defaultdict(set)  # maps from temps to where it is stored (reg or mem).
+        self.address_desc = defaultdict(set)  # maps from temps to where it is stored (reg or mcem).
 
-        self.stack_slots = []
+        self.stack_slots = [1] # reserve a slot for saved bp, because bp points to saved bp
 
     @property
     def cur_bp_offset(self):
@@ -941,7 +941,7 @@ class LC3(object):
                 reg_alloc.free_local_reg(dst_local, dst_reg)
                 self.vl_store_local(dst_reg, reg_alloc.get_loc(dst_local).bp_offset)
 
-            if c_reg and (c_local in self._global_vars or c_local in func.locals):
+            if c_reg and c_local in self._global_vars:
                 reg_alloc.free_local(c_local)
 
             if dst_local in self._global_vars:
