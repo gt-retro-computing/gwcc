@@ -1009,10 +1009,10 @@ class LC3(object):
             raise RuntimeError('invalid GlobalName: ' + str(global_name.value))
 
     def compile(self):
-        self.emit_comment('This code was compiled with the Gangweed Retargetable C Compiler')
-        self.emit_comment('')
-        self.emit_comment('')
-        self.emit_newline()
+        self._asm.append('; This code was compiled with the Gangweed Retargetable C Compiler')
+        self._asm.append(';')
+        self._asm.append(';')
+        self._asm.append('')
 
         self._cur_binary_loc = 0x3000
         self._cur_orig = 0x3000
