@@ -848,6 +848,13 @@ class LC3(object):
                     self.cl_twos(dst_reg)
                 elif stmt.op == il.UnaryOp.Negate:
                     self.cl_ones(dst_reg)
+                elif stmt.op == il.UnaryOp.LogicalNot:
+                    self.cl_test(dst_reg)
+                    self.emit_insn('BRnp #3')
+                    self.emit_insn('AND %s, %s, #0' % (dst_reg, dst_reg))
+                    self.emit_insn('ADD %s, %s, #1' % (dst_reg, dst_reg))
+                    self.emit_insn('BRnzp #1')
+                    self.emit_insn('AND %s, %s, #0' % (dst_reg, dst_reg))
                 else:
                     raise UnsupportedFeatureError('unsupported unary operation ' + str(stmt.op))
             elif typ == il.ConstantStmt:
