@@ -86,7 +86,7 @@ class NaturalizationPass(object):
                 # merge singleton immediate flow siblings
                 if len(cfg.get_edges(bb)) == 1:
                     succ = next(iter(cfg.get_edges(bb))).dst
-                    if len(cfg.get_edges_to(succ)) == 1 and type(succ.stmts[-1]) == il.GotoStmt:
+                    if len(cfg.get_edges_to(succ)) == 1 and type(bb.stmts[-1]) == il.GotoStmt:
                         # print 'merging ' + str(succ) + ' into ' + str(bb)
                         self.merge(bb, succ)
                         break
